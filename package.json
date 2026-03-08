@@ -1,0 +1,35 @@
+{
+  "name": "tarifportal-ki",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tarifvergleichsportal Backend (GDL vs EVG)",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/akzimmer1975-beep/tarifportal-ki.git"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^5.0.6",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.3.0",
+    "helmet": "^8.1.0",
+    "openai": "^6.27.0",
+    "pg": "^8.20.0",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.3.5",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
