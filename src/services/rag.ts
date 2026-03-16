@@ -114,7 +114,7 @@ function scoreRow(row: SearchDocumentRow, query: string): number {
     if (text.includes("lokführer")) score += 0.3;
     if (text.includes("lokomotivführer")) score += 0.35;
     if (text.includes("triebfahrzeugführer")) score += 0.35;
-    if (text.includes("tf")) score += 0.1;
+    if (text.includes(" tf ")) score += 0.05;
   }
 
   if (query.includes("ruhezeit")) {
@@ -307,14 +307,14 @@ async function getBestRows(
 ): Promise<SearchDocumentRow[]> {
   const rawVectorResults = await runExpandedVectorSearch(query, {
     union: options?.union,
-    limit: options?.vectorLimit ?? 10
+    limit: options?.vectorLimit ?? 20
   });
 
   let rows = normalizeRows(
     rawVectorResults,
     query,
     options?.minSimilarity ?? 0.4,
-    options?.finalLimit ?? 8
+    options?.finalLimit ?? 10
   );
 
   console.log("[RAG] Normalized vector rows:", rows.length);
@@ -324,12 +324,12 @@ async function getBestRows(
 
     const fallbackRows = await runKeywordFallback(query, {
       union: options?.union,
-      limit: options?.vectorLimit ?? 10
+      limit: options?.vectorLimit ?? 20
     });
 
     rows = rerankRows(dedupeRows(fallbackRows), query).slice(
       0,
-      options?.finalLimit ?? 8
+      options?.finalLimit ?? 10
     );
 
     console.log("[RAG] Keyword fallback rows:", rows.length);
@@ -351,14 +351,14 @@ export async function answerWithRag(
     const [gdlRows, evgRows] = await Promise.all([
       getBestRows(query, {
         union: "GDL",
-        vectorLimit: 12,
-        finalLimit: 6,
+        vectorLimit: 20,
+        finalLimit: 10,
         minSimilarity: 0.4
       }),
       getBestRows(query, {
         union: "EVG",
-        vectorLimit: 12,
-        finalLimit: 6,
+        vectorLimit: 20,
+        finalLimit: 10,
         minSimilarity: 0.4
       })
     ]);
@@ -450,8 +450,8 @@ export async function answerWithRag(
 
   const rows = await getBestRows(query, {
     union: options?.union,
-    vectorLimit: 12,
-    finalLimit: 8,
+    vectorLimit: 20,
+    finalLimit: 10,
     minSimilarity: 0.4
   });
 
@@ -461,7 +461,11 @@ export async function answerWithRag(
     return {
       mode: "single",
       answer: `Ich konnte im gefundenen Tarifkontext${target} keine ausreichend passenden Textstellen zur Frage finden.`,
-      sources: []
+      sources: [],
+      sourcesByUnion: {
+        GDL: [],
+        EVG: []
+      }
     };
   }
 
