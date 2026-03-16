@@ -5,6 +5,8 @@ import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 import { replaceDocumentParagraphs } from "../db.js";
 
 export type ExtractedParagraph = {
+  documentId: number;
+  itemId: string;
   pageNumber: number;
   paragraphIndex: number;
   chunkText: string;
@@ -90,16 +92,17 @@ export async function saveParagraphs(
     const split = splitIntoParagraphs(pages[p]);
 
     for (const chunkText of split) {
-  paragraphs.push({
-    documentId,
-    itemId,
-    pageNumber,
-    paragraphIndex,
-    chunkText
-  });
+      paragraphs.push({
+        documentId,
+        itemId,
+        pageNumber,
+        paragraphIndex,
+        chunkText
+      });
 
-  paragraphIndex++;
-}
+      paragraphIndex++;
+    }
+  }
 
   const result = await replaceDocumentParagraphs(
     documentId,
