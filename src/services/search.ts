@@ -12,30 +12,22 @@ function toPgVector(values: number[]) {
 export type SearchDocumentRow = {
   document_name: string;
   union_name: string | null;
+  tarif_type: string | null;
+  tariffwerk: string | null;
+  funktionsgruppe: string | null;
+  page_number: number | null;
+  paragraph_index: number | null;
   chunk_text: string;
   similarity: number;
 };
 
-export type SearchDocumentsOptions = {
-  limit?: number;
-  union?: "GDL" | "EVG";
-};
-
 export async function searchDocuments(
   query: string,
-  options: number | SearchDocumentsOptions = 10
+  options: { limit?: number; union?: "GDL" | "EVG" } = {}
 ): Promise<SearchDocumentRow[]> {
-  const normalized =
-    typeof options === "number"
-      ? { limit: options }
-      : options;
 
-  const limit =
-    typeof normalized.limit === "number" && Number.isFinite(normalized.limit)
-      ? Math.max(1, Math.min(normalized.limit, 20))
-      : 10;
-
-  const union = normalized.union;
+  const limit = options.limit ?? 10;
+  const union = options.union;
 
   const embedding = await client.embeddings.create({
     model: "text-embedding-3-small",
@@ -45,11 +37,12 @@ export async function searchDocuments(
   const vector = toPgVector(embedding.data[0].embedding);
 
   const params: unknown[] = [vector];
-  let whereClause = "";
+
+  let unionFilter = "";
 
   if (union) {
     params.push(union);
-    whereClause = `WHERE d.union_name = $${params.length}`;
+    unionFilter = `WHERE d.union_name = $${params.length}`;
   }
 
   params.push(limit);
@@ -58,62 +51,27 @@ export async function searchDocuments(
     SELECT
       d.name AS document_name,
       d.union_name,
+      d.tarif_type,
+      d.tariffwerk,
+      d.funktionsgruppe,
+      p.page_number,
+      p.paragraph_index,
       p.chunk_text,
       1 - (e.embedding <=> $1::vector) AS similarity
+
     FROM document_embeddings e
     JOIN document_paragraphs p
       ON p.id = e.paragraph_id
     JOIN documents d
       ON d.id = p.document_id
-    ${whereClause}
+
+    ${unionFilter}
+
     ORDER BY e.embedding <=> $1::vector
     LIMIT $${params.length}
   `;
 
   const result = await pool.query<SearchDocumentRow>(sql, params);
-  return result.rows;
-}
 
-export async function keywordSearch(
-  query: string,
-  options: number | SearchDocumentsOptions = 10
-): Promise<SearchDocumentRow[]> {
-  const normalized =
-    typeof options === "number"
-      ? { limit: options }
-      : options;
-
-  const limit =
-    typeof normalized.limit === "number" && Number.isFinite(normalized.limit)
-      ? Math.max(1, Math.min(normalized.limit, 20))
-      : 10;
-
-  const union = normalized.union;
-
-  const params: unknown[] = [query];
-  let whereClause = `WHERE p.chunk_text ILIKE '%' || $1 || '%'`;
-
-  if (union) {
-    params.push(union);
-    whereClause += ` AND d.union_name = $${params.length}`;
-  }
-
-  params.push(limit);
-
-  const sql = `
-    SELECT
-      d.name AS document_name,
-      d.union_name,
-      p.chunk_text,
-      0.4::float AS similarity
-    FROM document_paragraphs p
-    JOIN documents d
-      ON d.id = p.document_id
-    ${whereClause}
-    ORDER BY d.name ASC, p.id ASC
-    LIMIT $${params.length}
-  `;
-
-  const result = await pool.query<SearchDocumentRow>(sql, params);
   return result.rows;
 }

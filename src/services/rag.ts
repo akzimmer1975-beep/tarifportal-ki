@@ -23,15 +23,23 @@ function expandQuery(query: string): string[] {
     variants.add("Ruhezeiten am Dienstort");
     variants.add("auswärtige Ruhezeit");
     variants.add("Ruhezeit außerhalb des Dienstortes");
+    variants.add("Ruhetag");
+    variants.add("Ruhetage");
+  }
+
+  if (q.includes("auswärts")) {
+    variants.add("auswärtig");
+    variants.add("außerhalb des Dienstortes");
+    variants.add("am auswärtigen Einsatzort");
   }
 
   if (q.includes("lokführer")) {
     variants.add("Lokomotivführer");
     variants.add("Triebfahrzeugführer");
-    variants.add("Lokomotivführer Entgelt");
-    variants.add("Triebfahrzeugführer Entgelt");
+    variants.add("Tf");
     variants.add("Lokführer Eingruppierung");
     variants.add("Lokführer Funktionsgruppe");
+    variants.add("Lokführer Entgelt");
   }
 
   if (q.includes("entgelt")) {
@@ -49,6 +57,12 @@ function expandQuery(query: string): string[] {
     variants.add("Zuordnung");
   }
 
+  if (q.includes("arbeitszeit")) {
+    variants.add("Arbeitszeiten");
+    variants.add("Dienstzeit");
+    variants.add("Schichtzeit");
+  }
+
   return [...variants];
 }
 
@@ -60,6 +74,8 @@ function dedupeRows(rows: SearchDocumentRow[]): SearchDocumentRow[] {
     const key = [
       row.document_name,
       row.union_name ?? "",
+      row.page_number ?? "",
+      row.paragraph_index ?? "",
       row.chunk_text.trim()
     ].join("||");
 
@@ -72,49 +88,122 @@ function dedupeRows(rows: SearchDocumentRow[]): SearchDocumentRow[] {
   return result;
 }
 
+function scoreRow(row: SearchDocumentRow, query: string): number {
+  const text = [
+    row.document_name,
+    row.union_name ?? "",
+    row.tarif_type ?? "",
+    row.tariffwerk ?? "",
+    row.funktionsgruppe ?? "",
+    row.chunk_text
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  let score = row.similarity;
+
+  if (query.includes("entgelt")) {
+    if (text.includes("entgelt")) score += 0.25;
+    if (text.includes("tabellenentgelt")) score += 0.35;
+    if (text.includes("vergütung")) score += 0.2;
+    if (text.includes("entgeltgruppe")) score += 0.3;
+    if (text.includes("funktionsgruppe")) score += 0.3;
+  }
+
+  if (query.includes("lokführer")) {
+    if (text.includes("lokführer")) score += 0.3;
+    if (text.includes("lokomotivführer")) score += 0.35;
+    if (text.includes("triebfahrzeugführer")) score += 0.35;
+    if (text.includes("tf")) score += 0.1;
+  }
+
+  if (query.includes("ruhezeit")) {
+    if (text.includes("ruhezeit")) score += 0.25;
+    if (text.includes("ruhezeiten")) score += 0.25;
+    if (text.includes("ruhetag")) score += 0.15;
+    if (text.includes("dienstort")) score += 0.2;
+    if (text.includes("auswärt")) score += 0.2;
+  }
+
+  if (query.includes("arbeitszeit")) {
+    if (text.includes("arbeitszeit")) score += 0.25;
+    if (text.includes("dienstzeit")) score += 0.2;
+    if (text.includes("schicht")) score += 0.15;
+  }
+
+  return score;
+}
+
+function rerankRows(rows: SearchDocumentRow[], query: string): SearchDocumentRow[] {
+  const q = query.toLowerCase();
+
+  return [...rows].sort((a, b) => {
+    const scoreA = scoreRow(a, q);
+    const scoreB = scoreRow(b, q);
+
+    if (scoreB !== scoreA) {
+      return scoreB - scoreA;
+    }
+
+    return b.similarity - a.similarity;
+  });
+}
+
 function filterRows(
   rows: SearchDocumentRow[],
-  minSimilarity = 0.45
+  minSimilarity = 0.4
 ): SearchDocumentRow[] {
   return rows.filter((row) => row.similarity >= minSimilarity);
 }
 
 function normalizeRows(
   rows: SearchDocumentRow[],
-  minSimilarity = 0.45,
-  limit = 5
+  query: string,
+  minSimilarity = 0.4,
+  limit = 8
 ): SearchDocumentRow[] {
-  return filterRows(dedupeRows(rows), minSimilarity).slice(0, limit);
+  const deduped = dedupeRows(rows);
+  const filtered = filterRows(deduped, minSimilarity);
+  const reranked = rerankRows(filtered, query);
+  return reranked.slice(0, limit);
 }
 
 function rowsToSources(rows: SearchDocumentRow[]): SourceItem[] {
   return rows.map((row) => ({
     document: row.document_name,
     union: row.union_name,
+    tarif: row.tariffwerk,
+    tarifType: row.tarif_type,
+    funktionsgruppe: row.funktionsgruppe,
+    page: row.page_number,
+    paragraph: row.paragraph_index,
     text: row.chunk_text,
     similarity: Number(row.similarity.toFixed(4))
   }));
 }
 
-function formatContext(
-  rows: SearchDocumentRow[],
-  labelPrefix = "Quelle"
-): string {
+function formatContext(rows: SearchDocumentRow[]): string {
   if (!rows.length) {
     return "Keine ausreichend passenden Treffer gefunden.";
   }
 
   return rows
-    .map((row, index) =>
-      [
-        `[${labelPrefix} ${index + 1}]`,
-        `Dokument: ${row.document_name}`,
-        `Gewerkschaft: ${row.union_name ?? "-"}`,
-        `Ähnlichkeit: ${row.similarity.toFixed(4)}`,
-        `Text: ${row.chunk_text}`
-      ].join("\n")
+    .map(
+      (row, index) => `
+Quelle ${index + 1}
+Dokument: ${row.document_name}
+Gewerkschaft: ${row.union_name ?? "-"}
+Tarifwerk: ${row.tariffwerk ?? "-"}
+Tariftyp: ${row.tarif_type ?? "-"}
+Funktionsgruppe: ${row.funktionsgruppe ?? "-"}
+Seite: ${row.page_number ?? "-"}
+Abschnitt: ${row.paragraph_index ?? "-"}
+
+Text:
+${row.chunk_text}
+`.trim()
     )
-    .join("\n\n---\n\n");
+    .join("\n\n---------------------\n\n");
 }
 
 function groupSourcesByUnion(sources: SourceItem[]) {
@@ -151,7 +240,12 @@ async function runExpandedVectorSearch(
         similarity: row.similarity,
         document: row.document_name,
         union: row.union_name,
-        text: row.chunk_text.slice(0, 140)
+        tarif_type: row.tarif_type,
+        tariffwerk: row.tariffwerk,
+        funktionsgruppe: row.funktionsgruppe,
+        page_number: row.page_number,
+        paragraph_index: row.paragraph_index,
+        text: row.chunk_text.slice(0, 160)
       });
     }
 
@@ -181,10 +275,67 @@ async function runKeywordFallback(
 
     console.log(`[RAG] Keyword results for "${expandedQuery}":`, result.length);
 
+    for (const row of result.slice(0, 5)) {
+      console.log({
+        query: expandedQuery,
+        similarity: row.similarity,
+        document: row.document_name,
+        union: row.union_name,
+        tarif_type: row.tarif_type,
+        tariffwerk: row.tariffwerk,
+        funktionsgruppe: row.funktionsgruppe,
+        page_number: row.page_number,
+        paragraph_index: row.paragraph_index,
+        text: row.chunk_text.slice(0, 160)
+      });
+    }
+
     fallbackRows = fallbackRows.concat(result);
   }
 
-  return dedupeRows(fallbackRows).slice(0, options?.limit ?? 5);
+  return dedupeRows(fallbackRows);
+}
+
+async function getBestRows(
+  query: string,
+  options?: {
+    union?: UnionName;
+    vectorLimit?: number;
+    finalLimit?: number;
+    minSimilarity?: number;
+  }
+): Promise<SearchDocumentRow[]> {
+  const rawVectorResults = await runExpandedVectorSearch(query, {
+    union: options?.union,
+    limit: options?.vectorLimit ?? 10
+  });
+
+  let rows = normalizeRows(
+    rawVectorResults,
+    query,
+    options?.minSimilarity ?? 0.4,
+    options?.finalLimit ?? 8
+  );
+
+  console.log("[RAG] Normalized vector rows:", rows.length);
+
+  if (!rows.length) {
+    console.log("[RAG] Vector search empty -> keyword fallback");
+
+    const fallbackRows = await runKeywordFallback(query, {
+      union: options?.union,
+      limit: options?.vectorLimit ?? 10
+    });
+
+    rows = rerankRows(dedupeRows(fallbackRows), query).slice(
+      0,
+      options?.finalLimit ?? 8
+    );
+
+    console.log("[RAG] Keyword fallback rows:", rows.length);
+  }
+
+  return rows;
 }
 
 export async function answerWithRag(
@@ -197,29 +348,20 @@ export async function answerWithRag(
   const compareUnions = options?.compareUnions === true;
 
   if (compareUnions) {
-    const [gdlRaw, evgRaw] = await Promise.all([
-      runExpandedVectorSearch(query, { limit: 8, union: "GDL" }),
-      runExpandedVectorSearch(query, { limit: 8, union: "EVG" })
+    const [gdlRows, evgRows] = await Promise.all([
+      getBestRows(query, {
+        union: "GDL",
+        vectorLimit: 12,
+        finalLimit: 6,
+        minSimilarity: 0.4
+      }),
+      getBestRows(query, {
+        union: "EVG",
+        vectorLimit: 12,
+        finalLimit: 6,
+        minSimilarity: 0.4
+      })
     ]);
-
-    let gdlRows = normalizeRows(gdlRaw, 0.45, 4);
-    let evgRows = normalizeRows(evgRaw, 0.45, 4);
-
-    if (!gdlRows.length) {
-      const gdlFallback = await runKeywordFallback(query, {
-        limit: 8,
-        union: "GDL"
-      });
-      gdlRows = dedupeRows(gdlFallback).slice(0, 4);
-    }
-
-    if (!evgRows.length) {
-      const evgFallback = await runKeywordFallback(query, {
-        limit: 8,
-        union: "EVG"
-      });
-      evgRows = dedupeRows(evgFallback).slice(0, 4);
-    }
 
     console.log("[RAG] Compare mode GDL rows:", gdlRows.length);
     console.log("[RAG] Compare mode EVG rows:", evgRows.length);
@@ -245,8 +387,8 @@ export async function answerWithRag(
       };
     }
 
-    const gdlContext = formatContext(gdlRows, "GDL Quelle");
-    const evgContext = formatContext(evgRows, "EVG Quelle");
+    const gdlContext = formatContext(gdlRows);
+    const evgContext = formatContext(evgRows);
 
     let structured;
     let answer;
@@ -306,32 +448,15 @@ export async function answerWithRag(
     };
   }
 
-  const rawResults = await runExpandedVectorSearch(query, {
-    limit: 10,
-    union: options?.union
+  const rows = await getBestRows(query, {
+    union: options?.union,
+    vectorLimit: 12,
+    finalLimit: 8,
+    minSimilarity: 0.4
   });
 
-  let rows = normalizeRows(rawResults, 0.45, 5);
-
-  console.log("[RAG] Single mode normalized rows:", rows.length);
-
   if (!rows.length) {
-    console.log("[RAG] Vector search empty -> keyword fallback");
-
-    const fallbackRows = await runKeywordFallback(query, {
-      limit: 10,
-      union: options?.union
-    });
-
-    rows = dedupeRows(fallbackRows).slice(0, 5);
-
-    console.log("[RAG] Keyword fallback rows:", rows.length);
-  }
-
-  if (!rows.length) {
-    const target = options?.union
-      ? ` für ${options.union}`
-      : "";
+    const target = options?.union ? ` für ${options.union}` : "";
 
     return {
       mode: "single",
@@ -343,15 +468,14 @@ export async function answerWithRag(
   const sources = rowsToSources(rows);
 
   const answer = await generateRagAnswer({
-    question: options?.union
-      ? `${query} (nur ${options.union})`
-      : query,
-    context: formatContext(rows, "Quelle")
+    question: options?.union ? `${query} (nur ${options.union})` : query,
+    context: formatContext(rows)
   });
 
   return {
     mode: "single",
     answer,
-    sources
+    sources,
+    sourcesByUnion: groupSourcesByUnion(sources)
   };
 }
