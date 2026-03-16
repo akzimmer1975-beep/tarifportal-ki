@@ -69,7 +69,7 @@ export async function beginDeviceCodeLogin() {
       lastDeviceCode = {
         userCode: response.userCode,
         verificationUri: response.verificationUri,
-        expiresOn: response.expiresOn?.toISOString?.(),
+        expiresOn: new Date(Date.now() + response.expiresIn * 1000).toISOString(),
         message: response.message
       };
 

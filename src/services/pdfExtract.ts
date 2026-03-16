@@ -90,15 +90,16 @@ export async function saveParagraphs(
     const split = splitIntoParagraphs(pages[p]);
 
     for (const chunkText of split) {
-      paragraphs.push({
-        pageNumber,
-        paragraphIndex,
-        chunkText
-      });
+  paragraphs.push({
+    documentId,
+    itemId,
+    pageNumber,
+    paragraphIndex,
+    chunkText
+  });
 
-      paragraphIndex++;
-    }
-  }
+  paragraphIndex++;
+}
 
   const result = await replaceDocumentParagraphs(
     documentId,
