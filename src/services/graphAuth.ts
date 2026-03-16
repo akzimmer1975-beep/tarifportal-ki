@@ -14,21 +14,26 @@ const pca = new PublicClientApplication({
 
 let initialized = false;
 let pendingLoginPromise: Promise<any> | null = null;
-let lastDeviceCode: {
+
+type LastDeviceCode = {
   userCode: string;
   verificationUri: string;
   expiresOn?: string;
   message: string;
-} | null = null;
+};
+
+let lastDeviceCode: LastDeviceCode | null = null;
 
 async function ensureCacheLoaded() {
   if (initialized) return;
+
   try {
     const raw = await fs.readFile(cachePath, "utf8");
     pca.getTokenCache().deserialize(raw);
   } catch {
     // ok
   }
+
   initialized = true;
 }
 
@@ -55,40 +60,55 @@ export async function beginDeviceCodeLogin() {
   }
 
   if (pendingLoginPromise) {
+    if (lastDeviceCode) {
+      const deviceCode = lastDeviceCode;
+
+      return {
+        alreadyRunning: true,
+        userCode: deviceCode.userCode,
+        verificationUri: deviceCode.verificationUri,
+        expiresOn: deviceCode.expiresOn,
+        message: deviceCode.message
+      };
+    }
+
     return {
-      alreadyRunning: true,
-      ...lastDeviceCode
+      alreadyRunning: true
     };
   }
 
   lastDeviceCode = null;
 
-  pendingLoginPromise = pca.acquireTokenByDeviceCode({
-    scopes: ["User.Read", "Files.Read.All"],
-    deviceCodeCallback: (response) => {
-      lastDeviceCode = {
-        userCode: response.userCode,
-        verificationUri: response.verificationUri,
-        expiresOn: new Date(Date.now() + response.expiresIn * 1000).toISOString(),
-        message: response.message
+  pendingLoginPromise = pca
+    .acquireTokenByDeviceCode({
+      scopes: ["User.Read", "Files.Read.All"],
+      deviceCodeCallback: (response) => {
+        lastDeviceCode = {
+          userCode: response.userCode,
+          verificationUri: response.verificationUri,
+          expiresOn: new Date(
+            Date.now() + response.expiresIn * 1000
+          ).toISOString(),
+          message: response.message
+        };
+
+        console.log("\n=== MICROSOFT DEVICE LOGIN ===");
+        console.log(response.message);
+        console.log("================================\n");
+      }
+    })
+    .then(async (result) => {
+      if (!result?.account) {
+        throw new Error("Login fehlgeschlagen: kein Account zurückgegeben.");
+      }
+
+      await persistCache();
+
+      return {
+        username: result.account.username,
+        homeAccountId: result.account.homeAccountId
       };
-
-      console.log("\n=== MICROSOFT DEVICE LOGIN ===");
-      console.log(response.message);
-      console.log("================================\n");
-    }
-  }).then(async (result) => {
-    if (!result?.account) {
-      throw new Error("Login fehlgeschlagen: kein Account zurückgegeben.");
-    }
-
-    await persistCache();
-
-    return {
-      username: result.account.username,
-      homeAccountId: result.account.homeAccountId
-    };
-  });
+    });
 
   for (let i = 0; i < 20; i++) {
     if (lastDeviceCode) break;
@@ -100,9 +120,14 @@ export async function beginDeviceCodeLogin() {
     throw new Error("Device-Code konnte nicht erzeugt werden.");
   }
 
+  const deviceCode = lastDeviceCode;
+
   return {
     alreadyRunning: false,
-    ...lastDeviceCode
+    userCode: deviceCode.userCode,
+    verificationUri: deviceCode.verificationUri,
+    expiresOn: deviceCode.expiresOn,
+    message: deviceCode.message
   };
 }
 
@@ -125,7 +150,9 @@ export async function getGraphAccessToken(): Promise<string> {
 
   const account = await getPrimaryAccount();
   if (!account) {
-    throw new Error("Kein Microsoft-Login vorhanden. Bitte zuerst /api/auth/device/start aufrufen.");
+    throw new Error(
+      "Kein Microsoft-Login vorhanden. Bitte zuerst /api/auth/device/start aufrufen."
+    );
   }
 
   const silentResult = await pca.acquireTokenSilent({
