@@ -73,3 +73,47 @@ export async function searchDocuments(
   const result = await pool.query<SearchDocumentRow>(sql, params);
   return result.rows;
 }
+
+export async function keywordSearch(
+  query: string,
+  options: number | SearchDocumentsOptions = 10
+): Promise<SearchDocumentRow[]> {
+  const normalized =
+    typeof options === "number"
+      ? { limit: options }
+      : options;
+
+  const limit =
+    typeof normalized.limit === "number" && Number.isFinite(normalized.limit)
+      ? Math.max(1, Math.min(normalized.limit, 20))
+      : 10;
+
+  const union = normalized.union;
+
+  const params: unknown[] = [query];
+  let whereClause = `WHERE p.chunk_text ILIKE '%' || $1 || '%'`;
+
+  if (union) {
+    params.push(union);
+    whereClause += ` AND d.union_name = $${params.length}`;
+  }
+
+  params.push(limit);
+
+  const sql = `
+    SELECT
+      d.name AS document_name,
+      d.union_name,
+      p.chunk_text,
+      0.4::float AS similarity
+    FROM document_paragraphs p
+    JOIN documents d
+      ON d.id = p.document_id
+    ${whereClause}
+    ORDER BY d.name ASC, p.id ASC
+    LIMIT $${params.length}
+  `;
+
+  const result = await pool.query<SearchDocumentRow>(sql, params);
+  return result.rows;
+}

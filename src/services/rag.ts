@@ -5,6 +5,7 @@ import {
 } from "./openai.js";
 import {
   searchDocuments,
+  keywordSearch,
   type SearchDocumentRow
 } from "./search.js";
 import type {
@@ -12,6 +13,44 @@ import type {
   SourceItem,
   UnionName
 } from "../types/chat.js";
+
+function expandQuery(query: string): string[] {
+  const variants = new Set<string>([query]);
+  const q = query.toLowerCase();
+
+  if (q.includes("ruhezeit")) {
+    variants.add("Ruhezeiten");
+    variants.add("Ruhezeiten am Dienstort");
+    variants.add("auswärtige Ruhezeit");
+    variants.add("Ruhezeit außerhalb des Dienstortes");
+  }
+
+  if (q.includes("lokführer")) {
+    variants.add("Lokomotivführer");
+    variants.add("Triebfahrzeugführer");
+    variants.add("Lokomotivführer Entgelt");
+    variants.add("Triebfahrzeugführer Entgelt");
+    variants.add("Lokführer Eingruppierung");
+    variants.add("Lokführer Funktionsgruppe");
+  }
+
+  if (q.includes("entgelt")) {
+    variants.add("Tabellenentgelt");
+    variants.add("Monatsentgelt");
+    variants.add("Vergütung");
+    variants.add("Entgeltgruppe");
+    variants.add("Funktionsgruppe");
+    variants.add("Eingruppierung");
+  }
+
+  if (q.includes("eingruppierung")) {
+    variants.add("Funktionsgruppe");
+    variants.add("Entgeltgruppe");
+    variants.add("Zuordnung");
+  }
+
+  return [...variants];
+}
 
 function dedupeRows(rows: SearchDocumentRow[]): SearchDocumentRow[] {
   const seen = new Set<string>();
@@ -35,14 +74,14 @@ function dedupeRows(rows: SearchDocumentRow[]): SearchDocumentRow[] {
 
 function filterRows(
   rows: SearchDocumentRow[],
-  minSimilarity = 0.63
+  minSimilarity = 0.45
 ): SearchDocumentRow[] {
   return rows.filter((row) => row.similarity >= minSimilarity);
 }
 
 function normalizeRows(
   rows: SearchDocumentRow[],
-  minSimilarity = 0.63,
+  minSimilarity = 0.45,
   limit = 5
 ): SearchDocumentRow[] {
   return filterRows(dedupeRows(rows), minSimilarity).slice(0, limit);
@@ -85,6 +124,69 @@ function groupSourcesByUnion(sources: SourceItem[]) {
   };
 }
 
+async function runExpandedVectorSearch(
+  query: string,
+  options?: {
+    union?: UnionName;
+    limit?: number;
+  }
+): Promise<SearchDocumentRow[]> {
+  const queries = expandQuery(query);
+  let rawResults: SearchDocumentRow[] = [];
+
+  console.log("[RAG] Original query:", query);
+  console.log("[RAG] Expanded queries:", queries);
+
+  for (const expandedQuery of queries) {
+    const result = await searchDocuments(expandedQuery, {
+      limit: options?.limit ?? 10,
+      union: options?.union
+    });
+
+    console.log(`[RAG] Vector results for "${expandedQuery}":`, result.length);
+
+    for (const row of result.slice(0, 5)) {
+      console.log({
+        query: expandedQuery,
+        similarity: row.similarity,
+        document: row.document_name,
+        union: row.union_name,
+        text: row.chunk_text.slice(0, 140)
+      });
+    }
+
+    rawResults = rawResults.concat(result);
+  }
+
+  return rawResults;
+}
+
+async function runKeywordFallback(
+  query: string,
+  options?: {
+    union?: UnionName;
+    limit?: number;
+  }
+): Promise<SearchDocumentRow[]> {
+  const queries = expandQuery(query);
+  let fallbackRows: SearchDocumentRow[] = [];
+
+  console.log("[RAG] Starting keyword fallback for:", query);
+
+  for (const expandedQuery of queries) {
+    const result = await keywordSearch(expandedQuery, {
+      limit: options?.limit ?? 10,
+      union: options?.union
+    });
+
+    console.log(`[RAG] Keyword results for "${expandedQuery}":`, result.length);
+
+    fallbackRows = fallbackRows.concat(result);
+  }
+
+  return dedupeRows(fallbackRows).slice(0, options?.limit ?? 5);
+}
+
 export async function answerWithRag(
   query: string,
   options?: {
@@ -96,12 +198,31 @@ export async function answerWithRag(
 
   if (compareUnions) {
     const [gdlRaw, evgRaw] = await Promise.all([
-      searchDocuments(query, { limit: 8, union: "GDL" }),
-      searchDocuments(query, { limit: 8, union: "EVG" })
+      runExpandedVectorSearch(query, { limit: 8, union: "GDL" }),
+      runExpandedVectorSearch(query, { limit: 8, union: "EVG" })
     ]);
 
-    const gdlRows = normalizeRows(gdlRaw, 0.63, 4);
-    const evgRows = normalizeRows(evgRaw, 0.63, 4);
+    let gdlRows = normalizeRows(gdlRaw, 0.45, 4);
+    let evgRows = normalizeRows(evgRaw, 0.45, 4);
+
+    if (!gdlRows.length) {
+      const gdlFallback = await runKeywordFallback(query, {
+        limit: 8,
+        union: "GDL"
+      });
+      gdlRows = dedupeRows(gdlFallback).slice(0, 4);
+    }
+
+    if (!evgRows.length) {
+      const evgFallback = await runKeywordFallback(query, {
+        limit: 8,
+        union: "EVG"
+      });
+      evgRows = dedupeRows(evgFallback).slice(0, 4);
+    }
+
+    console.log("[RAG] Compare mode GDL rows:", gdlRows.length);
+    console.log("[RAG] Compare mode EVG rows:", evgRows.length);
 
     if (!gdlRows.length && !evgRows.length) {
       return {
@@ -185,14 +306,27 @@ export async function answerWithRag(
     };
   }
 
-  const rows = normalizeRows(
-    await searchDocuments(query, {
+  const rawResults = await runExpandedVectorSearch(query, {
+    limit: 10,
+    union: options?.union
+  });
+
+  let rows = normalizeRows(rawResults, 0.45, 5);
+
+  console.log("[RAG] Single mode normalized rows:", rows.length);
+
+  if (!rows.length) {
+    console.log("[RAG] Vector search empty -> keyword fallback");
+
+    const fallbackRows = await runKeywordFallback(query, {
       limit: 10,
       union: options?.union
-    }),
-    0.63,
-    5
-  );
+    });
+
+    rows = dedupeRows(fallbackRows).slice(0, 5);
+
+    console.log("[RAG] Keyword fallback rows:", rows.length);
+  }
 
   if (!rows.length) {
     const target = options?.union
