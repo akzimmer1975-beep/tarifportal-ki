@@ -84,7 +84,21 @@ router.get(
 router.get(
   "/:itemId",
   asyncHandler(async (req: Request, res: Response) => {
-    const { itemId } = req.params;
+    const rawItemId = req.params.itemId;
+
+    const itemId =
+      typeof rawItemId === "string"
+        ? rawItemId
+        : Array.isArray(rawItemId)
+          ? rawItemId[0]
+          : undefined;
+
+    if (!itemId) {
+      return res.status(400).json({
+        ok: false,
+        error: "itemId_required"
+      });
+    }
 
     const document = await getDocumentByItemId(itemId);
 
