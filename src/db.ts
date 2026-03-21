@@ -67,6 +67,16 @@ export type DocumentParagraphInput = {
   charCount?: number;
 };
 
+export type UpsertDocumentsResult = DocumentRow[] & {
+  count: number;
+};
+
+export type ReplaceParagraphsResult = {
+  documentId: number;
+  paragraphCount: number;
+  written: number;
+};
+
 export async function testDbConnection() {
   const client = await pool.connect();
   try {
@@ -169,6 +179,11 @@ export async function initDb(): Promise<void> {
     `);
 
     await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_document_embeddings_paragraph_id
+      ON document_embeddings(paragraph_id);
+    `);
+
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_search_feedback_normalized_query
       ON search_feedback(normalized_query);
     `);
@@ -183,12 +198,6 @@ export async function initDb(): Promise<void> {
       ON search_feedback(union_name);
     `);
 
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_document_embeddings_paragraph_id
-      ON document_embeddings(paragraph_id);
-    `);
-
-    // optionaler pgvector index; funktioniert nur, wenn genügend Daten vorhanden sind
     try {
       await client.query(`
         CREATE INDEX IF NOT EXISTS idx_document_embeddings_vector_cosine
@@ -204,7 +213,7 @@ export async function initDb(): Promise<void> {
   }
 }
 
-export async function getDocuments(): Promise<DocumentRow[]> {
+export async function getDocuments(_options?: unknown): Promise<DocumentRow[]> {
   const result = await pool.query<DocumentRow>(`
     SELECT
       id,
@@ -233,7 +242,7 @@ export async function getDocuments(): Promise<DocumentRow[]> {
   return result.rows;
 }
 
-export async function getDocumentsMeta(): Promise<DocumentRow[]> {
+export async function getDocumentsMeta(_options?: unknown): Promise<DocumentRow[]> {
   const result = await pool.query<DocumentRow>(`
     SELECT
       id,
@@ -302,9 +311,9 @@ export async function getDocumentByItemId(
 
 export async function upsertDocuments(
   docs: DocumentMetaInput[]
-): Promise<DocumentRow[]> {
+): Promise<UpsertDocumentsResult> {
   if (!docs.length) {
-    return [];
+    return Object.assign([] as DocumentRow[], { count: 0 });
   }
 
   const client = await pool.connect();
@@ -411,7 +420,10 @@ export async function upsertDocuments(
     }
 
     await client.query("COMMIT");
-    return saved;
+
+    return Object.assign(saved, {
+      count: saved.length
+    });
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -420,12 +432,11 @@ export async function upsertDocuments(
   }
 }
 
-export async function replaceDocumentParagraphs(params: {
+async function replaceDocumentParagraphsFromObject(params: {
   itemId: string;
   paragraphs: DocumentParagraphInput[];
-}): Promise<{ documentId: number; paragraphCount: number }> {
+}): Promise<ReplaceParagraphsResult> {
   const { itemId, paragraphs } = params;
-
   const client = await pool.connect();
 
   try {
@@ -460,6 +471,8 @@ export async function replaceDocumentParagraphs(params: {
       documentId
     ]);
 
+    let written = 0;
+
     for (const paragraph of paragraphs) {
       await client.query(
         `
@@ -483,6 +496,8 @@ export async function replaceDocumentParagraphs(params: {
           paragraph.charCount ?? paragraph.chunkText.length
         ]
       );
+
+      written += 1;
     }
 
     await client.query(
@@ -501,7 +516,8 @@ export async function replaceDocumentParagraphs(params: {
 
     return {
       documentId,
-      paragraphCount: paragraphs.length
+      paragraphCount: written,
+      written
     };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -509,6 +525,67 @@ export async function replaceDocumentParagraphs(params: {
   } finally {
     client.release();
   }
+}
+
+// Overload 1
+export async function replaceDocumentParagraphs(params: {
+  itemId: string;
+  paragraphs: DocumentParagraphInput[];
+}): Promise<ReplaceParagraphsResult>;
+
+// Overload 2
+export async function replaceDocumentParagraphs(
+  itemId: string,
+  paragraphs: Array<{
+    pageNumber?: number;
+    page_number?: number;
+    paragraphIndex?: number;
+    paragraph_index?: number;
+    chunkText?: string;
+    chunk_text?: string;
+    charCount?: number;
+    char_count?: number;
+  }>,
+  _options?: unknown
+): Promise<ReplaceParagraphsResult>;
+
+export async function replaceDocumentParagraphs(
+  arg1:
+    | {
+        itemId: string;
+        paragraphs: DocumentParagraphInput[];
+      }
+    | string,
+  arg2?: Array<{
+    pageNumber?: number;
+    page_number?: number;
+    paragraphIndex?: number;
+    paragraph_index?: number;
+    chunkText?: string;
+    chunk_text?: string;
+    charCount?: number;
+    char_count?: number;
+  }>,
+  _arg3?: unknown
+): Promise<ReplaceParagraphsResult> {
+  if (typeof arg1 === "string") {
+    const itemId = arg1;
+    const rawParagraphs = arg2 ?? [];
+
+    const paragraphs: DocumentParagraphInput[] = rawParagraphs.map((p, index) => ({
+      pageNumber: p.pageNumber ?? p.page_number ?? 1,
+      paragraphIndex: p.paragraphIndex ?? p.paragraph_index ?? index,
+      chunkText: p.chunkText ?? p.chunk_text ?? "",
+      charCount: p.charCount ?? p.char_count
+    }));
+
+    return replaceDocumentParagraphsFromObject({
+      itemId,
+      paragraphs
+    });
+  }
+
+  return replaceDocumentParagraphsFromObject(arg1);
 }
 
 export async function setDocumentEmbeddingStatus(
