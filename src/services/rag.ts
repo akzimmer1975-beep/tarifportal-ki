@@ -52,7 +52,6 @@ function dedupeRows(rows: SearchDocumentRow[]): SearchDocumentRow[] {
 
 function normalizeRows(
   rows: SearchDocumentRow[],
-  _query?: string,
   minSimilarity = 0.35,
   limit = 8
 ): SearchDocumentRow[] {
@@ -126,12 +125,7 @@ async function getBestRows(
     })
   ]);
 
-  return normalizeRows(
-    [...semanticRows, ...keywordRows],
-    query,
-    minSimilarity,
-    finalLimit
-  );
+  return normalizeRows([...semanticRows, ...keywordRows], minSimilarity, finalLimit);
 }
 
 function detectMainTopic(query: string): TopicKey {
@@ -297,11 +291,11 @@ function dedupeStrings(values: string[]): string[] {
   const result: string[] = [];
 
   for (const value of values) {
-    const normalized = value.trim();
-    if (!normalized) continue;
-    if (seen.has(normalized)) continue;
-    seen.add(normalized);
-    result.push(normalized);
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    if (seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
   }
 
   return result;
@@ -416,7 +410,7 @@ async function getRowsForSection(
     rows.push(...result);
   }
 
-  return normalizeRows(rows, `${baseQuery} ${section.title}`, 0.35, 6);
+  return normalizeRows(rows, 0.35, 6);
 }
 
 async function buildSectionCompare(

@@ -48,12 +48,12 @@ export async function searchDocuments(
 
   const union = normalized.union;
 
-  const embedding = await client.embeddings.create({
+  const embeddingResult = await client.embeddings.create({
     model: "text-embedding-3-small",
     input: query
   });
 
-  const vector = toPgVector(embedding.data[0].embedding);
+  const vector = toPgVector(embeddingResult.data[0].embedding);
 
   const params: unknown[] = [vector];
   let whereClause = "";
@@ -77,9 +77,9 @@ export async function searchDocuments(
       p.chunk_text,
       1 - (e.embedding <=> $1::vector) AS similarity
     FROM document_embeddings e
-    JOIN document_paragraphs p
+    INNER JOIN document_paragraphs p
       ON p.id = e.paragraph_id
-    JOIN documents d
+    INNER JOIN documents d
       ON d.id = p.document_id
     ${whereClause}
     ORDER BY e.embedding <=> $1::vector
@@ -125,10 +125,13 @@ export async function keywordSearch(
       p.chunk_text,
       0.35::float AS similarity
     FROM document_paragraphs p
-    JOIN documents d
+    INNER JOIN documents d
       ON d.id = p.document_id
     ${whereClause}
-    ORDER BY d.name ASC, p.page_number ASC NULLS LAST, p.paragraph_index ASC NULLS LAST
+    ORDER BY
+      d.name ASC,
+      p.page_number ASC NULLS LAST,
+      p.paragraph_index ASC NULLS LAST
     LIMIT $${params.length}
   `;
 
