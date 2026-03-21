@@ -108,6 +108,89 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_document_paragraphs_page_number
     ON document_paragraphs (page_number);
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS search_feedback (
+      id BIGSERIAL PRIMARY KEY,
+
+      query_text TEXT NOT NULL,
+      normalized_query TEXT NOT NULL,
+      topic_key TEXT,
+      section_key TEXT,
+
+      target_type TEXT NOT NULL CHECK (
+        target_type IN ('source', 'answer', 'custom_source')
+      ),
+
+      feedback_type TEXT NOT NULL CHECK (
+        feedback_type IN (
+          'relevant',
+          'preferred',
+          'not_relevant',
+          'answer_good',
+          'answer_bad',
+          'sources_good',
+          'sources_bad',
+          'custom_source'
+        )
+      ),
+
+      source_document_name TEXT,
+      source_union_name TEXT,
+      source_tariff_type TEXT,
+      source_tariffwerk TEXT,
+      source_funktionsgruppe TEXT,
+      source_page_number INTEGER,
+      source_paragraph_index INTEGER,
+      source_text TEXT,
+      source_similarity DOUBLE PRECISION,
+
+      custom_document_name TEXT,
+      custom_union_name TEXT,
+      custom_tariff_type TEXT,
+      custom_tariffwerk TEXT,
+      custom_funktionsgruppe TEXT,
+      custom_page_number INTEGER,
+      custom_paragraph_index INTEGER,
+      custom_text TEXT,
+      custom_comment TEXT,
+
+      answer_text TEXT,
+      user_comment TEXT,
+
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_search_feedback_normalized_query
+    ON search_feedback (normalized_query);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_search_feedback_topic_key
+    ON search_feedback (topic_key);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_search_feedback_section_key
+    ON search_feedback (section_key);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_search_feedback_target_type
+    ON search_feedback (target_type);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_search_feedback_feedback_type
+    ON search_feedback (feedback_type);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_search_feedback_created_at
+    ON search_feedback (created_at DESC);
+  `);
 }
 
 export async function upsertDocuments(files: any[]) {
