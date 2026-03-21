@@ -1,3 +1,26 @@
+import OpenAI from "openai";
+import type {
+  ChatResponseBody,
+  SourceItem,
+  StructuredCompareAnswer,
+  StructuredCompareSection,
+  UnionName
+} from "../types/chat.js";
+import {
+  keywordSearch,
+  searchDocuments,
+  type SearchDocumentRow
+} from "./search.js";
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+type AnswerWithRagOptions = {
+  union?: UnionName;
+  compareUnions?: boolean;
+};
+
 type TopicKey = "ruhezeiten" | "arbeitszeit" | "entgelt" | "urlaub" | "unknown";
 
 type TopicSection = {
@@ -5,6 +28,111 @@ type TopicSection = {
   title: string;
   searchQueries: string[];
 };
+
+function dedupeRows(rows: SearchDocumentRow[]): SearchDocumentRow[] {
+  const seen = new Set<string>();
+  const result: SearchDocumentRow[] = [];
+
+  for (const row of rows) {
+    const key = [
+      row.document_name,
+      row.union_name ?? "",
+      row.page_number ?? "",
+      row.paragraph_index ?? "",
+      row.chunk_text.trim()
+    ].join("::");
+
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(row);
+  }
+
+  return result;
+}
+
+function normalizeRows(
+  rows: SearchDocumentRow[],
+  _query?: string,
+  minSimilarity = 0.35,
+  limit = 8
+): SearchDocumentRow[] {
+  return dedupeRows(rows)
+    .filter((row) => row.similarity >= minSimilarity)
+    .sort((a, b) => b.similarity - a.similarity)
+    .slice(0, limit);
+}
+
+function rowsToSources(rows: SearchDocumentRow[]): SourceItem[] {
+  return rows.map((row) => ({
+    document: row.document_name,
+    union: row.union_name,
+    tarif: row.tariffwerk,
+    tarifType: row.tarif_type,
+    funktionsgruppe: row.funktionsgruppe,
+    page: row.page_number,
+    paragraph: row.paragraph_index,
+    text: row.chunk_text,
+    similarity: row.similarity
+  }));
+}
+
+function formatContext(rows: SearchDocumentRow[]): string {
+  if (!rows.length) {
+    return "Keine passenden Quellen gefunden.";
+  }
+
+  return rows
+    .map((row, index) => {
+      const meta = [
+        `Quelle ${index + 1}`,
+        `Dokument: ${row.document_name}`,
+        `Gewerkschaft: ${row.union_name ?? "unbekannt"}`,
+        row.tariffwerk ? `Tarifwerk: ${row.tariffwerk}` : null,
+        row.tarif_type ? `Tariftyp: ${row.tarif_type}` : null,
+        row.funktionsgruppe ? `Funktionsgruppe: ${row.funktionsgruppe}` : null,
+        row.page_number != null ? `Seite: ${row.page_number}` : null,
+        row.paragraph_index != null ? `Absatz: ${row.paragraph_index}` : null,
+        `Ähnlichkeit: ${row.similarity.toFixed(4)}`
+      ]
+        .filter(Boolean)
+        .join(" | ");
+
+      return `${meta}\n${row.chunk_text}`;
+    })
+    .join("\n\n---\n\n");
+}
+
+async function getBestRows(
+  query: string,
+  options: {
+    union?: UnionName;
+    vectorLimit?: number;
+    finalLimit?: number;
+    minSimilarity?: number;
+  } = {}
+): Promise<SearchDocumentRow[]> {
+  const vectorLimit = options.vectorLimit ?? 12;
+  const finalLimit = options.finalLimit ?? 8;
+  const minSimilarity = options.minSimilarity ?? 0.35;
+
+  const [semanticRows, keywordRows] = await Promise.all([
+    searchDocuments(query, {
+      union: options.union,
+      limit: vectorLimit
+    }),
+    keywordSearch(query, {
+      union: options.union,
+      limit: Math.min(vectorLimit, 8)
+    })
+  ]);
+
+  return normalizeRows(
+    [...semanticRows, ...keywordRows],
+    query,
+    minSimilarity,
+    finalLimit
+  );
+}
 
 function detectMainTopic(query: string): TopicKey {
   const q = query.toLowerCase();
@@ -93,21 +221,12 @@ function getSectionsForTopic(topic: TopicKey): TopicSection[] {
         {
           key: "schicht_dienstzeit",
           title: "Schichtzeit / Dienstzeit",
-          searchQueries: [
-            "Schichtzeit",
-            "Dienstzeit",
-            "Arbeitszeit Schicht"
-          ]
+          searchQueries: ["Schichtzeit", "Dienstzeit", "Arbeitszeit Schicht"]
         },
         {
           key: "pause_mehrarbeit",
           title: "Pausen / Mehrarbeit / Zuschläge",
-          searchQueries: [
-            "Mehrarbeit",
-            "Überstunden",
-            "Arbeitszeitzuschlag",
-            "Ruhepause"
-          ]
+          searchQueries: ["Mehrarbeit", "Überstunden", "Arbeitszeitzuschlag", "Ruhepause"]
         }
       ];
 
@@ -150,20 +269,12 @@ function getSectionsForTopic(topic: TopicKey): TopicSection[] {
         {
           key: "urlaubsanspruch",
           title: "Urlaubsanspruch",
-          searchQueries: [
-            "Urlaubsanspruch",
-            "Erholungsurlaub",
-            "Urlaubstage"
-          ]
+          searchQueries: ["Urlaubsanspruch", "Erholungsurlaub", "Urlaubstage"]
         },
         {
           key: "lage",
           title: "Lage / Planung / Gewährung",
-          searchQueries: [
-            "Urlaubsplanung",
-            "Gewährung von Urlaub",
-            "Hauptjahresurlaub"
-          ]
+          searchQueries: ["Urlaubsplanung", "Gewährung von Urlaub", "Hauptjahresurlaub"]
         },
         {
           key: "sonderregeln",
@@ -178,6 +289,110 @@ function getSectionsForTopic(topic: TopicKey): TopicSection[] {
 
     default:
       return [];
+  }
+}
+
+function dedupeStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const normalized = value.trim();
+    if (!normalized) continue;
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+
+  return result;
+}
+
+async function generateSingleAnswer(params: {
+  question: string;
+  context: string;
+  union?: UnionName;
+}): Promise<string> {
+  const prompt = `
+Du bist ein Assistent für Tarifverträge.
+Beantworte die Frage nur anhand des bereitgestellten Kontexts.
+Wenn etwas im Kontext nicht sicher erkennbar ist, sage das ausdrücklich.
+Keine erfundenen Angaben.
+Antworte auf Deutsch, präzise und mit Bezug auf die Quellenlage.
+
+Frage:
+${params.question}
+
+${params.union ? `Gewünschte Gewerkschaft: ${params.union}` : ""}
+
+Kontext:
+${params.context}
+  `.trim();
+
+  const response = await client.responses.create({
+    model: "gpt-5-mini",
+    input: prompt
+  });
+
+  return response.output_text?.trim() || "Es konnte keine Antwort erzeugt werden.";
+}
+
+async function generateStructuredComparisonAnswer(params: {
+  question: string;
+  gdlContext: string;
+  evgContext: string;
+}): Promise<StructuredCompareAnswer> {
+  const prompt = `
+Vergleiche GDL und EVG ausschließlich anhand der bereitgestellten Kontexte.
+Erfinde nichts.
+Wenn Unterschiede oder Gemeinsamkeiten nicht sicher aus den Quellen belegbar sind, dann lasse sie weg.
+
+Gib ausschließlich JSON zurück mit genau dieser Struktur:
+{
+  "kurzfazit": "string",
+  "gdl": "string",
+  "evg": "string",
+  "unterschiede": ["string"],
+  "gemeinsamkeiten": ["string"]
+}
+
+Frage:
+${params.question}
+
+GDL-Kontext:
+${params.gdlContext}
+
+EVG-Kontext:
+${params.evgContext}
+  `.trim();
+
+  const response = await client.responses.create({
+    model: "gpt-5-mini",
+    input: prompt
+  });
+
+  const raw = response.output_text?.trim() || "";
+
+  try {
+    const parsed = JSON.parse(raw) as StructuredCompareAnswer;
+
+    return {
+      kurzfazit: typeof parsed.kurzfazit === "string" ? parsed.kurzfazit : "",
+      gdl: typeof parsed.gdl === "string" ? parsed.gdl : "",
+      evg: typeof parsed.evg === "string" ? parsed.evg : "",
+      unterschiede: Array.isArray(parsed.unterschiede) ? parsed.unterschiede : [],
+      gemeinsamkeiten: Array.isArray(parsed.gemeinsamkeiten)
+        ? parsed.gemeinsamkeiten
+        : []
+    };
+  } catch {
+    return {
+      kurzfazit:
+        "Es konnte kein vollständig strukturierter Vergleich erzeugt werden. Bitte die Quellen prüfen.",
+      gdl: "Für GDL liegen passende Quellen im Suchergebnis vor.",
+      evg: "Für EVG liegen passende Quellen im Suchergebnis vor.",
+      unterschiede: [],
+      gemeinsamkeiten: []
+    };
   }
 }
 
@@ -207,18 +422,7 @@ async function getRowsForSection(
 async function buildSectionCompare(
   baseQuery: string,
   section: TopicSection
-): Promise<{
-  key: string;
-  title: string;
-  gdl: string;
-  evg: string;
-  unterschiede: string[];
-  gemeinsamkeiten: string[];
-  sourcesByUnion: {
-    GDL: SourceItem[];
-    EVG: SourceItem[];
-  };
-}> {
+): Promise<StructuredCompareSection> {
   const [gdlRows, evgRows] = await Promise.all([
     getRowsForSection(baseQuery, section, "GDL"),
     getRowsForSection(baseQuery, section, "EVG")
@@ -288,29 +492,18 @@ async function buildSectionCompare(
 
 function summarizeSectionResults(
   topic: TopicKey,
-  sections: Array<{
-    title: string;
-    gdl: string;
-    evg: string;
-    unterschiede: string[];
-    gemeinsamkeiten: string[];
-  }>
+  sections: StructuredCompareSection[]
 ): StructuredCompareAnswer {
-  const allDifferences = sections.flatMap((s) => s.unterschiede);
-  const allSimilarities = sections.flatMap((s) => s.gemeinsamkeiten);
+  const allDifferences = sections.flatMap((section) => section.unterschiede);
+  const allSimilarities = sections.flatMap((section) => section.gemeinsamkeiten);
 
   const kurzfazit =
     sections.length > 0
       ? `Die Frage wurde thematisch in ${sections.length} Unterrubriken zum Oberthema "${topic}" aufgeteilt und getrennt für GDL und EVG ausgewertet.`
       : "Es konnten keine thematisch passenden Unterrubriken ausgewertet werden.";
 
-  const gdl = sections
-    .map((section) => `- ${section.title}: ${section.gdl}`)
-    .join("\n");
-
-  const evg = sections
-    .map((section) => `- ${section.title}: ${section.evg}`)
-    .join("\n");
+  const gdl = sections.map((section) => `- ${section.title}: ${section.gdl}`).join("\n");
+  const evg = sections.map((section) => `- ${section.title}: ${section.evg}`).join("\n");
 
   return {
     kurzfazit,
@@ -321,30 +514,9 @@ function summarizeSectionResults(
   };
 }
 
-function dedupeStrings(values: string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-
-  for (const value of values) {
-    const normalized = value.trim();
-    if (!normalized) continue;
-    if (seen.has(normalized)) continue;
-    seen.add(normalized);
-    result.push(normalized);
-  }
-
-  return result;
-}
-
 function formatHierarchicalAnswer(
   structured: StructuredCompareAnswer,
-  sections: Array<{
-    title: string;
-    gdl: string;
-    evg: string;
-    unterschiede: string[];
-    gemeinsamkeiten: string[];
-  }>
+  sections: StructuredCompareSection[]
 ): string {
   const parts: string[] = [];
 
@@ -381,4 +553,121 @@ function formatHierarchicalAnswer(
   }
 
   return parts.join("\n\n");
+}
+
+export async function answerWithRag(
+  query: string,
+  options: AnswerWithRagOptions = {}
+): Promise<ChatResponseBody> {
+  const trimmedQuery = query.trim();
+
+  if (!trimmedQuery) {
+    throw new Error("query fehlt");
+  }
+
+  if (options.compareUnions) {
+    const topic = detectMainTopic(trimmedQuery);
+    const topicSections = getSectionsForTopic(topic);
+
+    if (topic !== "unknown" && topicSections.length > 0) {
+      const sections = await Promise.all(
+        topicSections.map((section) => buildSectionCompare(trimmedQuery, section))
+      );
+
+      const structured = summarizeSectionResults(topic, sections);
+
+      const allSources = sections.flatMap((section) => [
+        ...section.sourcesByUnion.GDL,
+        ...section.sourcesByUnion.EVG
+      ]);
+
+      const gdlSources = sections.flatMap((section) => section.sourcesByUnion.GDL);
+      const evgSources = sections.flatMap((section) => section.sourcesByUnion.EVG);
+
+      return {
+        mode: "compare",
+        answer: formatHierarchicalAnswer(structured, sections),
+        structured,
+        sections,
+        sources: allSources,
+        sourcesByUnion: {
+          GDL: gdlSources,
+          EVG: evgSources
+        }
+      };
+    }
+
+    const [gdlRows, evgRows] = await Promise.all([
+      getBestRows(trimmedQuery, {
+        union: "GDL",
+        vectorLimit: 12,
+        finalLimit: 8,
+        minSimilarity: 0.35
+      }),
+      getBestRows(trimmedQuery, {
+        union: "EVG",
+        vectorLimit: 12,
+        finalLimit: 8,
+        minSimilarity: 0.35
+      })
+    ]);
+
+    const gdlSources = rowsToSources(gdlRows);
+    const evgSources = rowsToSources(evgRows);
+
+    const structured = await generateStructuredComparisonAnswer({
+      question: trimmedQuery,
+      gdlContext: formatContext(gdlRows),
+      evgContext: formatContext(evgRows)
+    });
+
+    const answer = [
+      `Kurzfazit: ${structured.kurzfazit}`,
+      "",
+      `GDL: ${structured.gdl}`,
+      "",
+      `EVG: ${structured.evg}`,
+      "",
+      "Unterschiede:",
+      structured.unterschiede.length
+        ? structured.unterschiede.map((item) => `- ${item}`).join("\n")
+        : "Keine klar belegbaren Unterschiede.",
+      "",
+      "Gemeinsamkeiten:",
+      structured.gemeinsamkeiten.length
+        ? structured.gemeinsamkeiten.map((item) => `- ${item}`).join("\n")
+        : "Keine klar belegbaren Gemeinsamkeiten."
+    ].join("\n");
+
+    return {
+      mode: "compare",
+      answer,
+      structured,
+      sources: [...gdlSources, ...evgSources],
+      sourcesByUnion: {
+        GDL: gdlSources,
+        EVG: evgSources
+      }
+    };
+  }
+
+  const rows = await getBestRows(trimmedQuery, {
+    union: options.union,
+    vectorLimit: 12,
+    finalLimit: 8,
+    minSimilarity: 0.35
+  });
+
+  const sources = rowsToSources(rows);
+  const answer = await generateSingleAnswer({
+    question: trimmedQuery,
+    context: formatContext(rows),
+    union: options.union
+  });
+
+  return {
+    mode: "single",
+    answer,
+    sources
+  };
 }

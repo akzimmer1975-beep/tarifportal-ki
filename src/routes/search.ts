@@ -7,7 +7,7 @@ const router = Router();
 router.post(
   "/search",
   asyncHandler(async (req: Request, res: Response) => {
-    const { query, limit } = req.body ?? {};
+    const { query, limit, union } = req.body ?? {};
 
     if (typeof query !== "string" || !query.trim()) {
       return res.status(400).json({
@@ -21,7 +21,15 @@ router.post(
         ? Math.max(1, Math.min(limit, 20))
         : 10;
 
-    const results = await searchDocuments(query.trim(), safeLimit);
+    const safeUnion =
+      union === "GDL" || union === "EVG"
+        ? union
+        : undefined;
+
+    const results = await searchDocuments(query.trim(), {
+      limit: safeLimit,
+      union: safeUnion
+    });
 
     res.json({
       ok: true,

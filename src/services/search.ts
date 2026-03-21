@@ -26,16 +26,27 @@ export type SearchDocumentsOptions = {
   union?: "GDL" | "EVG";
 };
 
+function normalizeOptions(
+  options: SearchDocumentsOptions | number = {}
+): SearchDocumentsOptions {
+  if (typeof options === "number") {
+    return { limit: options };
+  }
+  return options;
+}
+
 export async function searchDocuments(
   query: string,
-  options: SearchDocumentsOptions = {}
+  options: SearchDocumentsOptions | number = {}
 ): Promise<SearchDocumentRow[]> {
+  const normalized = normalizeOptions(options);
+
   const limit =
-    typeof options.limit === "number" && Number.isFinite(options.limit)
-      ? Math.max(1, Math.min(options.limit, 50))
+    typeof normalized.limit === "number" && Number.isFinite(normalized.limit)
+      ? Math.max(1, Math.min(normalized.limit, 50))
       : 10;
 
-  const union = options.union;
+  const union = normalized.union;
 
   const embedding = await client.embeddings.create({
     model: "text-embedding-3-small",
@@ -81,14 +92,16 @@ export async function searchDocuments(
 
 export async function keywordSearch(
   query: string,
-  options: SearchDocumentsOptions = {}
+  options: SearchDocumentsOptions | number = {}
 ): Promise<SearchDocumentRow[]> {
+  const normalized = normalizeOptions(options);
+
   const limit =
-    typeof options.limit === "number" && Number.isFinite(options.limit)
-      ? Math.max(1, Math.min(options.limit, 50))
+    typeof normalized.limit === "number" && Number.isFinite(normalized.limit)
+      ? Math.max(1, Math.min(normalized.limit, 50))
       : 10;
 
-  const union = options.union;
+  const union = normalized.union;
 
   const params: unknown[] = [query];
   let whereClause = `WHERE p.chunk_text ILIKE '%' || $1 || '%'`;

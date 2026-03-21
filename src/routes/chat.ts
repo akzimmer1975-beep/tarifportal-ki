@@ -51,14 +51,14 @@ chatRouter.post("/", async (req: Request<{}, {}, ChatRequestBody>, res: Response
       mode: result.mode,
       answer: result.answer,
       structured: result.structured,
+      sections: result.sections,
       sources: result.sources,
       sourcesByUnion: result.sourcesByUnion
     });
   } catch (error) {
     console.error("POST /api/chat failed:", error);
 
-    const message =
-      error instanceof Error ? error.message : "Unbekannter Fehler";
+    const message = error instanceof Error ? error.message : "Unbekannter Fehler";
 
     return res.status(500).json({
       ok: false,
