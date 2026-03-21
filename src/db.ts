@@ -432,22 +432,27 @@ export async function upsertDocuments(
   }
 }
 
-async function replaceDocumentParagraphsFromObject(params: {
+async function replaceDocumentParagraphsInternal(params: {
   itemId: string;
+  documentId?: number;
   paragraphs: DocumentParagraphInput[];
 }): Promise<ReplaceParagraphsResult> {
-  const { itemId, paragraphs } = params;
+  const { itemId, documentId: explicitDocumentId, paragraphs } = params;
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
 
-    const docResult = await client.query<{ id: number }>(
-      `SELECT id FROM documents WHERE item_id = $1 LIMIT 1`,
-      [itemId]
-    );
+    let documentId = explicitDocumentId;
 
-    const documentId = docResult.rows[0]?.id;
+    if (!documentId) {
+      const docResult = await client.query<{ id: number }>(
+        `SELECT id FROM documents WHERE item_id = $1 LIMIT 1`,
+        [itemId]
+      );
+
+      documentId = docResult.rows[0]?.id;
+    }
 
     if (!documentId) {
       throw new Error(`Dokument mit item_id '${itemId}' nicht gefunden.`);
@@ -527,13 +532,12 @@ async function replaceDocumentParagraphsFromObject(params: {
   }
 }
 
-// Overload 1
 export async function replaceDocumentParagraphs(params: {
   itemId: string;
+  documentId?: number;
   paragraphs: DocumentParagraphInput[];
 }): Promise<ReplaceParagraphsResult>;
 
-// Overload 2
 export async function replaceDocumentParagraphs(
   itemId: string,
   paragraphs: Array<{
@@ -550,13 +554,9 @@ export async function replaceDocumentParagraphs(
 ): Promise<ReplaceParagraphsResult>;
 
 export async function replaceDocumentParagraphs(
-  arg1:
-    | {
-        itemId: string;
-        paragraphs: DocumentParagraphInput[];
-      }
-    | string,
-  arg2?: Array<{
+  documentId: number,
+  itemId: string,
+  paragraphs: Array<{
     pageNumber?: number;
     page_number?: number;
     paragraphIndex?: number;
@@ -565,27 +565,81 @@ export async function replaceDocumentParagraphs(
     chunk_text?: string;
     charCount?: number;
     char_count?: number;
-  }>,
-  _arg3?: unknown
+  }>
+): Promise<ReplaceParagraphsResult>;
+
+export async function replaceDocumentParagraphs(
+  arg1:
+    | {
+        itemId: string;
+        documentId?: number;
+        paragraphs: DocumentParagraphInput[];
+      }
+    | string
+    | number,
+  arg2?:
+    | string
+    | Array<{
+        pageNumber?: number;
+        page_number?: number;
+        paragraphIndex?: number;
+        paragraph_index?: number;
+        chunkText?: string;
+        chunk_text?: string;
+        charCount?: number;
+        char_count?: number;
+      }>,
+  arg3?: Array<{
+    pageNumber?: number;
+    page_number?: number;
+    paragraphIndex?: number;
+    paragraph_index?: number;
+    chunkText?: string;
+    chunk_text?: string;
+    charCount?: number;
+    char_count?: number;
+  }>
 ): Promise<ReplaceParagraphsResult> {
-  if (typeof arg1 === "string") {
-    const itemId = arg1;
-    const rawParagraphs = arg2 ?? [];
+  if (typeof arg1 === "number" && typeof arg2 === "string") {
+    const documentId = arg1;
+    const itemId = arg2;
+    const rawParagraphs = arg3 ?? [];
 
     const paragraphs: DocumentParagraphInput[] = rawParagraphs.map((p, index) => ({
+      documentId,
+      itemId,
       pageNumber: p.pageNumber ?? p.page_number ?? 1,
-      paragraphIndex: p.paragraphIndex ?? p.paragraph_index ?? index,
+      paragraphIndex: p.paragraphIndex ?? p.paragraph_index ?? index + 1,
       chunkText: p.chunkText ?? p.chunk_text ?? "",
       charCount: p.charCount ?? p.char_count
     }));
 
-    return replaceDocumentParagraphsFromObject({
+    return replaceDocumentParagraphsInternal({
+      documentId,
       itemId,
       paragraphs
     });
   }
 
-  return replaceDocumentParagraphsFromObject(arg1);
+  if (typeof arg1 === "string") {
+    const itemId = arg1;
+    const rawParagraphs = Array.isArray(arg2) ? arg2 : [];
+
+    const paragraphs: DocumentParagraphInput[] = rawParagraphs.map((p, index) => ({
+      itemId,
+      pageNumber: p.pageNumber ?? p.page_number ?? 1,
+      paragraphIndex: p.paragraphIndex ?? p.paragraph_index ?? index + 1,
+      chunkText: p.chunkText ?? p.chunk_text ?? "",
+      charCount: p.charCount ?? p.char_count
+    }));
+
+    return replaceDocumentParagraphsInternal({
+      itemId,
+      paragraphs
+    });
+  }
+
+  return replaceDocumentParagraphsInternal(arg1);
 }
 
 export async function setDocumentEmbeddingStatus(
