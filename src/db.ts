@@ -67,6 +67,17 @@ export type DocumentParagraphInput = {
   charCount?: number;
 };
 
+export type RawParagraphInput = {
+  pageNumber?: number;
+  page_number?: number;
+  paragraphIndex?: number;
+  paragraph_index?: number;
+  chunkText?: string;
+  chunk_text?: string;
+  charCount?: number;
+  char_count?: number;
+};
+
 export type UpsertDocumentsResult = DocumentRow[] & {
   count: number;
 };
@@ -75,6 +86,12 @@ export type ReplaceParagraphsResult = {
   documentId: number;
   paragraphCount: number;
   written: number;
+};
+
+type ReplaceParagraphsObjectInput = {
+  itemId: string;
+  documentId?: number;
+  paragraphs: DocumentParagraphInput[];
 };
 
 export async function testDbConnection() {
@@ -432,11 +449,24 @@ export async function upsertDocuments(
   }
 }
 
-async function replaceDocumentParagraphsInternal(params: {
-  itemId: string;
-  documentId?: number;
-  paragraphs: DocumentParagraphInput[];
-}): Promise<ReplaceParagraphsResult> {
+function normalizeRawParagraphs(
+  rawParagraphs: RawParagraphInput[],
+  itemId: string,
+  documentId?: number
+): DocumentParagraphInput[] {
+  return rawParagraphs.map((p, index) => ({
+    itemId,
+    documentId,
+    pageNumber: p.pageNumber ?? p.page_number ?? 1,
+    paragraphIndex: p.paragraphIndex ?? p.paragraph_index ?? index + 1,
+    chunkText: p.chunkText ?? p.chunk_text ?? "",
+    charCount: p.charCount ?? p.char_count
+  }));
+}
+
+async function replaceDocumentParagraphsInternal(
+  params: ReplaceParagraphsObjectInput
+): Promise<ReplaceParagraphsResult> {
   const { itemId, documentId: explicitDocumentId, paragraphs } = params;
   const client = await pool.connect();
 
@@ -532,92 +562,40 @@ async function replaceDocumentParagraphsInternal(params: {
   }
 }
 
-export async function replaceDocumentParagraphs(params: {
-  itemId: string;
-  documentId?: number;
-  paragraphs: DocumentParagraphInput[];
-}): Promise<ReplaceParagraphsResult>;
+export async function replaceDocumentParagraphs(
+  params: ReplaceParagraphsObjectInput
+): Promise<ReplaceParagraphsResult>;
 
 export async function replaceDocumentParagraphs(
   itemId: string,
-  paragraphs: Array<{
-    pageNumber?: number;
-    page_number?: number;
-    paragraphIndex?: number;
-    paragraph_index?: number;
-    chunkText?: string;
-    chunk_text?: string;
-    charCount?: number;
-    char_count?: number;
-  }>,
-  _options?: unknown
+  paragraphs: RawParagraphInput[],
+  options?: unknown
 ): Promise<ReplaceParagraphsResult>;
 
 export async function replaceDocumentParagraphs(
   documentId: number,
   itemId: string,
-  paragraphs: Array<{
-    pageNumber?: number;
-    page_number?: number;
-    paragraphIndex?: number;
-    paragraph_index?: number;
-    chunkText?: string;
-    chunk_text?: string;
-    charCount?: number;
-    char_count?: number;
-  }>
+  paragraphs: RawParagraphInput[]
 ): Promise<ReplaceParagraphsResult>;
 
 export async function replaceDocumentParagraphs(
-  arg1:
-    | {
-        itemId: string;
-        documentId?: number;
-        paragraphs: DocumentParagraphInput[];
-      }
-    | string
-    | number,
-  arg2?:
-    | string
-    | Array<{
-        pageNumber?: number;
-        page_number?: number;
-        paragraphIndex?: number;
-        paragraph_index?: number;
-        chunkText?: string;
-        chunk_text?: string;
-        charCount?: number;
-        char_count?: number;
-      }>,
-  arg3?: Array<{
-    pageNumber?: number;
-    page_number?: number;
-    paragraphIndex?: number;
-    paragraph_index?: number;
-    chunkText?: string;
-    chunk_text?: string;
-    charCount?: number;
-    char_count?: number;
-  }>
+  arg1: ReplaceParagraphsObjectInput | string | number,
+  arg2?: string | RawParagraphInput[],
+  arg3?: unknown
 ): Promise<ReplaceParagraphsResult> {
-  if (typeof arg1 === "number" && typeof arg2 === "string") {
+  if (typeof arg1 === "number") {
     const documentId = arg1;
-    const itemId = arg2;
-    const rawParagraphs = arg3 ?? [];
+    const itemId = typeof arg2 === "string" ? arg2 : "";
+    const rawParagraphs = Array.isArray(arg3) ? (arg3 as RawParagraphInput[]) : [];
 
-    const paragraphs: DocumentParagraphInput[] = rawParagraphs.map((p, index) => ({
-      documentId,
-      itemId,
-      pageNumber: p.pageNumber ?? p.page_number ?? 1,
-      paragraphIndex: p.paragraphIndex ?? p.paragraph_index ?? index + 1,
-      chunkText: p.chunkText ?? p.chunk_text ?? "",
-      charCount: p.charCount ?? p.char_count
-    }));
+    if (!itemId) {
+      throw new Error("itemId fehlt.");
+    }
 
     return replaceDocumentParagraphsInternal({
       documentId,
       itemId,
-      paragraphs
+      paragraphs: normalizeRawParagraphs(rawParagraphs, itemId, documentId)
     });
   }
 
@@ -625,17 +603,9 @@ export async function replaceDocumentParagraphs(
     const itemId = arg1;
     const rawParagraphs = Array.isArray(arg2) ? arg2 : [];
 
-    const paragraphs: DocumentParagraphInput[] = rawParagraphs.map((p, index) => ({
-      itemId,
-      pageNumber: p.pageNumber ?? p.page_number ?? 1,
-      paragraphIndex: p.paragraphIndex ?? p.paragraph_index ?? index + 1,
-      chunkText: p.chunkText ?? p.chunk_text ?? "",
-      charCount: p.charCount ?? p.char_count
-    }));
-
     return replaceDocumentParagraphsInternal({
       itemId,
-      paragraphs
+      paragraphs: normalizeRawParagraphs(rawParagraphs, itemId)
     });
   }
 
