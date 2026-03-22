@@ -117,7 +117,7 @@ export async function keywordSearch(
     SELECT
       d.name AS document_name,
       d.union_name,
-      d.tariff_type AS tarif_type,,
+      d.tariff_type AS tarif_type,
       d.tariffwerk,
       d.funktionsgruppe,
       p.page_number,
