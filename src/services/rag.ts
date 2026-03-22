@@ -622,9 +622,8 @@ export async function answerWithRag(
     const topic = detectMainTopic(trimmedQuery);
     const topicSections = getSectionsForTopic(topic);
     const shouldBuildSections =
-      topic !== "unknown" &&
-      topicSections.length > 0 &&
-      isBroadCompareQuery(trimmedQuery);
+  topic !== "unknown" &&
+  topicSections.length > 0;
 
     if (shouldBuildSections) {
       const sections = await Promise.all(
