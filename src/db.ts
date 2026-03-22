@@ -94,6 +94,15 @@ type ReplaceParagraphsObjectInput = {
   paragraphs: DocumentParagraphInput[];
 };
 
+export type GetDocumentsOptions = {
+  limit?: number;
+  union?: string;
+  tariffType?: string;
+  tariffwerk?: string;
+  funktionsgruppe?: string;
+  q?: string;
+};
+
 export async function testDbConnection() {
   const client = await pool.connect();
   try {
@@ -164,12 +173,32 @@ export async function initDb(): Promise<void> {
         normalized_query TEXT NOT NULL,
         topic_key TEXT,
         section_key TEXT,
-        union_name TEXT,
-        document_name TEXT NOT NULL,
-        page_number INT,
-        paragraph_index INT,
-        chunk_text TEXT NOT NULL,
+        target_type TEXT NOT NULL,
         feedback_type TEXT NOT NULL,
+
+        source_document_name TEXT,
+        source_union_name TEXT,
+        source_tarif_type TEXT,
+        source_tariffwerk TEXT,
+        source_funktionsgruppe TEXT,
+        source_page_number INT,
+        source_paragraph_index INT,
+        source_text TEXT,
+        source_similarity DOUBLE PRECISION,
+
+        custom_document_name TEXT,
+        custom_union_name TEXT,
+        custom_tarif_type TEXT,
+        custom_tariffwerk TEXT,
+        custom_funktionsgruppe TEXT,
+        custom_page_number INT,
+        custom_paragraph_index INT,
+        custom_text TEXT,
+        custom_comment TEXT,
+
+        answer_text TEXT,
+        user_comment TEXT,
+
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         query_embedding vector(1536)
       );
@@ -183,6 +212,11 @@ export async function initDb(): Promise<void> {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_documents_union_name
       ON documents(union_name);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_documents_tarif_type
+      ON documents(tarif_type);
     `);
 
     await client.query(`
@@ -211,8 +245,13 @@ export async function initDb(): Promise<void> {
     `);
 
     await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_search_feedback_union_name
-      ON search_feedback(union_name);
+      CREATE INDEX IF NOT EXISTS idx_search_feedback_target_type
+      ON search_feedback(target_type);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_search_feedback_source_union_name
+      ON search_feedback(source_union_name);
     `);
 
     try {
@@ -230,8 +269,53 @@ export async function initDb(): Promise<void> {
   }
 }
 
-export async function getDocuments(_options?: unknown): Promise<DocumentRow[]> {
-  const result = await pool.query<DocumentRow>(`
+export async function getDocuments(
+  options: GetDocumentsOptions = {}
+): Promise<DocumentRow[]> {
+  const limit =
+    typeof options.limit === "number" && Number.isFinite(options.limit)
+      ? Math.max(1, Math.min(options.limit, 500))
+      : 100;
+
+  const params: unknown[] = [];
+  const where: string[] = [];
+
+  if (options.union?.trim()) {
+    params.push(options.union.trim());
+    where.push(`union_name = $${params.length}`);
+  }
+
+  if (options.tariffType?.trim()) {
+    params.push(options.tariffType.trim());
+    where.push(`tarif_type = $${params.length}`);
+  }
+
+  if (options.tariffwerk?.trim()) {
+    params.push(options.tariffwerk.trim());
+    where.push(`tariffwerk = $${params.length}`);
+  }
+
+  if (options.funktionsgruppe?.trim()) {
+    params.push(options.funktionsgruppe.trim());
+    where.push(`funktionsgruppe = $${params.length}`);
+  }
+
+  if (options.q?.trim()) {
+    params.push(`%${options.q.trim()}%`);
+    const qParam = `$${params.length}`;
+    where.push(`(
+      name ILIKE ${qParam}
+      OR path ILIKE ${qParam}
+      OR COALESCE(union_name, '') ILIKE ${qParam}
+      OR COALESCE(tarif_type, '') ILIKE ${qParam}
+      OR COALESCE(tariffwerk, '') ILIKE ${qParam}
+      OR COALESCE(funktionsgruppe, '') ILIKE ${qParam}
+    )`);
+  }
+
+  params.push(limit);
+
+  const sql = `
     SELECT
       id,
       item_id,
@@ -253,9 +337,15 @@ export async function getDocuments(_options?: unknown): Promise<DocumentRow[]> {
       created_at,
       updated_at
     FROM documents
-    ORDER BY name ASC
-  `);
+    ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+    ORDER BY
+      union_name ASC NULLS LAST,
+      tariffwerk ASC NULLS LAST,
+      name ASC
+    LIMIT $${params.length}
+  `;
 
+  const result = await pool.query<DocumentRow>(sql, params);
   return result.rows;
 }
 

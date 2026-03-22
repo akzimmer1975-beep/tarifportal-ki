@@ -68,7 +68,7 @@ export async function insertFeedback(body: CreateFeedbackBody): Promise<Feedback
 
       source_document_name,
       source_union_name,
-      source_tariff_type,
+      source_tarif_type,
       source_tariffwerk,
       source_funktionsgruppe,
       source_page_number,
@@ -78,7 +78,7 @@ export async function insertFeedback(body: CreateFeedbackBody): Promise<Feedback
 
       custom_document_name,
       custom_union_name,
-      custom_tariff_type,
+      custom_tarif_type,
       custom_tariffwerk,
       custom_funktionsgruppe,
       custom_page_number,
@@ -107,7 +107,7 @@ export async function insertFeedback(body: CreateFeedbackBody): Promise<Feedback
 
       body.source?.documentName ?? null,
       body.source?.unionName ?? null,
-      body.source?.tariffType ?? null,
+      body.source?.tarifType ?? body.source?.tariffType ?? null,
       body.source?.tariffwerk ?? null,
       body.source?.funktionsgruppe ?? null,
       body.source?.pageNumber ?? null,
@@ -117,7 +117,7 @@ export async function insertFeedback(body: CreateFeedbackBody): Promise<Feedback
 
       body.customSource?.documentName ?? null,
       body.customSource?.unionName ?? null,
-      body.customSource?.tariffType ?? null,
+      body.customSource?.tarifType ?? body.customSource?.tariffType ?? null,
       body.customSource?.tariffwerk ?? null,
       body.customSource?.funktionsgruppe ?? null,
       body.customSource?.pageNumber ?? null,
