@@ -19,6 +19,7 @@ export interface SourceItem {
 }
 
 export interface StructuredCompareAnswer {
+  topicKey?: string;
   kurzfazit: string;
   gdl: string;
   evg: string;
@@ -29,14 +30,16 @@ export interface StructuredCompareAnswer {
 export interface StructuredCompareSection {
   key: string;
   title: string;
-  gdl: string;
-  evg: string;
-  unterschiede: string[];
-  gemeinsamkeiten: string[];
-  sourcesByUnion: {
-    GDL: SourceItem[];
-    EVG: SourceItem[];
-  };
+  summary?: string;
+
+  gdlText: string;
+  evgText: string;
+
+  gdlDifferences: string[];
+  evgDifferences: string[];
+
+  gdlSources: SourceItem[];
+  evgSources: SourceItem[];
 }
 
 export interface ChatResponseBody {

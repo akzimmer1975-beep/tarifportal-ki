@@ -29,6 +29,15 @@ type TopicSection = {
   searchQueries: string[];
 };
 
+type StructuredSectionModelResponse = {
+  summary?: string;
+  gdl: string;
+  evg: string;
+  gdl_unterschiede: string[];
+  evg_unterschiede: string[];
+  gemeinsamkeiten: string[];
+};
+
 function dedupeRows(rows: SearchDocumentRow[]): SearchDocumentRow[] {
   const seen = new Set<string>();
   const result: SearchDocumentRow[] = [];
@@ -273,11 +282,7 @@ function getSectionsForTopic(topic: TopicKey): TopicSection[] {
         {
           key: "sonderregeln",
           title: "Sonderregeln / Übertragung / Verfall",
-          searchQueries: [
-            "Urlaubsübertragung",
-            "Urlaubsverfall",
-            "Sonderregelung Urlaub"
-          ]
+          searchQueries: ["Übertragung Urlaub", "Verfall Urlaub", "Zusatzurlaub"]
         }
       ];
 
@@ -286,32 +291,49 @@ function getSectionsForTopic(topic: TopicKey): TopicSection[] {
   }
 }
 
-function dedupeStrings(values: string[]): string[] {
+function dedupeStrings(items: string[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
 
-  for (const value of values) {
-    const trimmed = value.trim();
-    if (!trimmed) continue;
-    if (seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    result.push(trimmed);
+  for (const item of items) {
+    const normalized = item.trim();
+    if (!normalized) continue;
+
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    result.push(normalized);
   }
 
   return result;
 }
 
-async function generateSingleAnswer(params: {
+function stripJsonFences(raw: string): string {
+  const trimmed = raw.trim();
+
+  if (trimmed.startsWith("```json")) {
+    return trimmed.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
+  }
+
+  if (trimmed.startsWith("```")) {
+    return trimmed.replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
+  }
+
+  return trimmed;
+}
+
+async function generateAnswer(params: {
   question: string;
   context: string;
   union?: UnionName;
 }): Promise<string> {
   const prompt = `
-Du bist ein Assistent für Tarifverträge.
-Beantworte die Frage nur anhand des bereitgestellten Kontexts.
-Wenn etwas im Kontext nicht sicher erkennbar ist, sage das ausdrücklich.
-Keine erfundenen Angaben.
-Antworte auf Deutsch, präzise und mit Bezug auf die Quellenlage.
+Beantworte die tarifliche Frage ausschließlich anhand des bereitgestellten Kontexts.
+Erfinde nichts.
+Wenn etwas nicht sicher aus den Quellen hervorgeht, dann sage das klar.
+
+Strukturiere die Antwort verständlich und nenne Unterschiede oder Einschränkungen nur dann, wenn sie im Kontext belegbar sind.
 
 Frage:
 ${params.question}
@@ -334,7 +356,7 @@ async function generateStructuredComparisonAnswer(params: {
   question: string;
   gdlContext: string;
   evgContext: string;
-}): Promise<StructuredCompareAnswer> {
+}): Promise<StructuredSectionModelResponse> {
   const prompt = `
 Vergleiche GDL und EVG ausschließlich anhand der bereitgestellten Kontexte.
 Erfinde nichts.
@@ -342,10 +364,11 @@ Wenn Unterschiede oder Gemeinsamkeiten nicht sicher aus den Quellen belegbar sin
 
 Gib ausschließlich JSON zurück mit genau dieser Struktur:
 {
-  "kurzfazit": "string",
+  "summary": "string",
   "gdl": "string",
   "evg": "string",
-  "unterschiede": ["string"],
+  "gdl_unterschiede": ["string"],
+  "evg_unterschiede": ["string"],
   "gemeinsamkeiten": ["string"]
 }
 
@@ -364,27 +387,32 @@ ${params.evgContext}
     input: prompt
   });
 
-  const raw = response.output_text?.trim() || "";
+  const raw = stripJsonFences(response.output_text?.trim() || "");
 
   try {
-    const parsed = JSON.parse(raw) as StructuredCompareAnswer;
+    const parsed = JSON.parse(raw) as Partial<StructuredSectionModelResponse>;
 
     return {
-      kurzfazit: typeof parsed.kurzfazit === "string" ? parsed.kurzfazit : "",
+      summary: typeof parsed.summary === "string" ? parsed.summary : "",
       gdl: typeof parsed.gdl === "string" ? parsed.gdl : "",
       evg: typeof parsed.evg === "string" ? parsed.evg : "",
-      unterschiede: Array.isArray(parsed.unterschiede) ? parsed.unterschiede : [],
+      gdl_unterschiede: Array.isArray(parsed.gdl_unterschiede)
+        ? parsed.gdl_unterschiede.filter((item): item is string => typeof item === "string")
+        : [],
+      evg_unterschiede: Array.isArray(parsed.evg_unterschiede)
+        ? parsed.evg_unterschiede.filter((item): item is string => typeof item === "string")
+        : [],
       gemeinsamkeiten: Array.isArray(parsed.gemeinsamkeiten)
-        ? parsed.gemeinsamkeiten
+        ? parsed.gemeinsamkeiten.filter((item): item is string => typeof item === "string")
         : []
     };
   } catch {
     return {
-      kurzfazit:
-        "Es konnte kein vollständig strukturierter Vergleich erzeugt werden. Bitte die Quellen prüfen.",
+      summary: "",
       gdl: "Für GDL liegen passende Quellen im Suchergebnis vor.",
       evg: "Für EVG liegen passende Quellen im Suchergebnis vor.",
-      unterschiede: [],
+      gdl_unterschiede: [],
+      evg_unterschiede: [],
       gemeinsamkeiten: []
     };
   }
@@ -432,14 +460,15 @@ async function buildSectionCompare(
     return {
       key: section.key,
       title: section.title,
-      gdl: "Für GDL wurden in dieser Unterrubrik keine ausreichend passenden Textstellen gefunden.",
-      evg: "Für EVG wurden in dieser Unterrubrik keine ausreichend passenden Textstellen gefunden.",
-      unterschiede: [],
-      gemeinsamkeiten: [],
-      sourcesByUnion: {
-        GDL: [],
-        EVG: []
-      }
+      summary: "",
+      gdlText:
+        "Für GDL wurden in dieser Unterrubrik keine ausreichend passenden Textstellen gefunden.",
+      evgText:
+        "Für EVG wurden in dieser Unterrubrik keine ausreichend passenden Textstellen gefunden.",
+      gdlDifferences: [],
+      evgDifferences: [],
+      gdlSources: [],
+      evgSources: []
     };
   }
 
@@ -453,14 +482,13 @@ async function buildSectionCompare(
     return {
       key: section.key,
       title: section.title,
-      gdl: structured.gdl,
-      evg: structured.evg,
-      unterschiede: structured.unterschiede,
-      gemeinsamkeiten: structured.gemeinsamkeiten,
-      sourcesByUnion: {
-        GDL: gdlSources,
-        EVG: evgSources
-      }
+      summary: structured.summary || "",
+      gdlText: structured.gdl,
+      evgText: structured.evg,
+      gdlDifferences: dedupeStrings(structured.gdl_unterschiede),
+      evgDifferences: dedupeStrings(structured.evg_unterschiede),
+      gdlSources,
+      evgSources
     };
   } catch (error) {
     console.warn(`[RAG] Strukturierte Teilantwort fehlgeschlagen (${section.title}):`, error);
@@ -468,18 +496,17 @@ async function buildSectionCompare(
     return {
       key: section.key,
       title: section.title,
-      gdl: gdlRows.length
+      summary: "",
+      gdlText: gdlRows.length
         ? "Für GDL liegen passende Treffer zu dieser Unterrubrik vor."
         : "Für GDL liegen keine ausreichend passenden Textstellen zu dieser Unterrubrik vor.",
-      evg: evgRows.length
+      evgText: evgRows.length
         ? "Für EVG liegen passende Treffer zu dieser Unterrubrik vor."
         : "Für EVG liegen keine ausreichend passenden Textstellen zu dieser Unterrubrik vor.",
-      unterschiede: [],
-      gemeinsamkeiten: [],
-      sourcesByUnion: {
-        GDL: gdlSources,
-        EVG: evgSources
-      }
+      gdlDifferences: [],
+      evgDifferences: [],
+      gdlSources,
+      evgSources
     };
   }
 }
@@ -488,18 +515,36 @@ function summarizeSectionResults(
   topic: TopicKey,
   sections: StructuredCompareSection[]
 ): StructuredCompareAnswer {
-  const allDifferences = sections.flatMap((section) => section.unterschiede);
-  const allSimilarities = sections.flatMap((section) => section.gemeinsamkeiten);
+  const allDifferences = sections.flatMap((section) => [
+    ...section.gdlDifferences,
+    ...section.evgDifferences
+  ]);
+  const allSimilarities: string[] = [];
 
   const kurzfazit =
     sections.length > 0
       ? `Die Frage wurde thematisch in ${sections.length} Unterrubriken zum Oberthema "${topic}" aufgeteilt und getrennt für GDL und EVG ausgewertet.`
       : "Es konnten keine thematisch passenden Unterrubriken ausgewertet werden.";
 
-  const gdl = sections.map((section) => `- ${section.title}: ${section.gdl}`).join("\n");
-  const evg = sections.map((section) => `- ${section.title}: ${section.evg}`).join("\n");
+  const gdl = sections
+    .map((section) => `- ${section.title}: ${section.gdlText}`)
+    .join("\n");
+
+  const evg = sections
+    .map((section) => `- ${section.title}: ${section.evgText}`)
+    .join("\n");
+
+  sections.forEach((section) => {
+    if (section.gdlText && section.evgText) {
+      const sameHint = section.summary?.trim();
+      if (sameHint) {
+        allSimilarities.push(`${section.title}: ${sameHint}`);
+      }
+    }
+  });
 
   return {
+    topicKey: topic,
     kurzfazit,
     gdl,
     evg,
@@ -518,14 +563,14 @@ function formatHierarchicalAnswer(
 
   sections.forEach((section, index) => {
     parts.push(
-      `${index + 2}. ${section.title}\nGDL:\n${section.gdl}\n\nEVG:\n${section.evg}\n\nUnterschiede:\n${
-        section.unterschiede.length
-          ? section.unterschiede.map((item) => `- ${item}`).join("\n")
-          : "Keine klar belegbaren Unterschiede im gefundenen Kontext."
-      }\n\nGemeinsamkeiten:\n${
-        section.gemeinsamkeiten.length
-          ? section.gemeinsamkeiten.map((item) => `- ${item}`).join("\n")
-          : "Keine klar belegbaren Gemeinsamkeiten im gefundenen Kontext."
+      `${index + 2}. ${section.title}\nGDL:\n${section.gdlText}\n\nEVG:\n${section.evgText}\n\nBesonderheiten GDL:\n${
+        section.gdlDifferences.length
+          ? section.gdlDifferences.map((item) => `- ${item}`).join("\n")
+          : "Keine klar belegbaren Besonderheiten im gefundenen Kontext."
+      }\n\nBesonderheiten EVG:\n${
+        section.evgDifferences.length
+          ? section.evgDifferences.map((item) => `- ${item}`).join("\n")
+          : "Keine klar belegbaren Besonderheiten im gefundenen Kontext."
       }`
     );
   });
@@ -571,12 +616,12 @@ export async function answerWithRag(
       const structured = summarizeSectionResults(topic, sections);
 
       const allSources = sections.flatMap((section) => [
-        ...section.sourcesByUnion.GDL,
-        ...section.sourcesByUnion.EVG
+        ...section.gdlSources,
+        ...section.evgSources
       ]);
 
-      const gdlSources = sections.flatMap((section) => section.sourcesByUnion.GDL);
-      const evgSources = sections.flatMap((section) => section.sourcesByUnion.EVG);
+      const gdlSources = sections.flatMap((section) => section.gdlSources);
+      const evgSources = sections.flatMap((section) => section.evgSources);
 
       return {
         mode: "compare",
@@ -609,33 +654,43 @@ export async function answerWithRag(
     const gdlSources = rowsToSources(gdlRows);
     const evgSources = rowsToSources(evgRows);
 
-    const structured = await generateStructuredComparisonAnswer({
+    const compare = await generateStructuredComparisonAnswer({
       question: trimmedQuery,
       gdlContext: formatContext(gdlRows),
       evgContext: formatContext(evgRows)
     });
 
-    const answer = [
-      `Kurzfazit: ${structured.kurzfazit}`,
-      "",
-      `GDL: ${structured.gdl}`,
-      "",
-      `EVG: ${structured.evg}`,
-      "",
-      "Unterschiede:",
-      structured.unterschiede.length
-        ? structured.unterschiede.map((item) => `- ${item}`).join("\n")
-        : "Keine klar belegbaren Unterschiede.",
-      "",
-      "Gemeinsamkeiten:",
-      structured.gemeinsamkeiten.length
-        ? structured.gemeinsamkeiten.map((item) => `- ${item}`).join("\n")
-        : "Keine klar belegbaren Gemeinsamkeiten."
-    ].join("\n");
+    const structured: StructuredCompareAnswer = {
+      topicKey: topic,
+      kurzfazit:
+        compare.summary ||
+        "Es wurde ein direkter Vergleich zwischen GDL und EVG auf Basis der gefundenen Quellen erstellt.",
+      gdl: compare.gdl,
+      evg: compare.evg,
+      unterschiede: dedupeStrings([
+        ...compare.gdl_unterschiede,
+        ...compare.evg_unterschiede
+      ]),
+      gemeinsamkeiten: dedupeStrings(compare.gemeinsamkeiten)
+    };
 
     return {
       mode: "compare",
-      answer,
+      answer: [
+        `Kurzfazit:\n${structured.kurzfazit}`,
+        `GDL:\n${structured.gdl}`,
+        `EVG:\n${structured.evg}`,
+        `Unterschiede:\n${
+          structured.unterschiede.length
+            ? structured.unterschiede.map((item) => `- ${item}`).join("\n")
+            : "Keine klar belegbaren Unterschiede."
+        }`,
+        `Gemeinsamkeiten:\n${
+          structured.gemeinsamkeiten.length
+            ? structured.gemeinsamkeiten.map((item) => `- ${item}`).join("\n")
+            : "Keine klar belegbaren Gemeinsamkeiten."
+        }`
+      ].join("\n\n"),
       structured,
       sources: [...gdlSources, ...evgSources],
       sourcesByUnion: {
@@ -653,7 +708,8 @@ export async function answerWithRag(
   });
 
   const sources = rowsToSources(rows);
-  const answer = await generateSingleAnswer({
+
+  const answer = await generateAnswer({
     question: trimmedQuery,
     context: formatContext(rows),
     union: options.union
