@@ -10,10 +10,11 @@ export type FeedbackType =
   | "sources_bad"
   | "custom_source";
 
+// 🔹 Quelle aus System (RAG)
 export interface FeedbackSourceInput {
   documentName?: string;
   unionName?: string;
-  tariffType?: string;
+  tarifType?: string; // ✅ FIX
   tariffwerk?: string;
   funktionsgruppe?: string;
   pageNumber?: number | null;
@@ -22,10 +23,11 @@ export interface FeedbackSourceInput {
   similarity?: number | null;
 }
 
+// 🔹 eigene Quelle
 export interface FeedbackCustomSourceInput {
   documentName?: string;
   unionName?: string;
-  tariffType?: string;
+  tarifType?: string; // ✅ FIX
   tariffwerk?: string;
   funktionsgruppe?: string;
   pageNumber?: number | null;
@@ -61,7 +63,7 @@ export interface FeedbackRow {
 
   source_document_name: string | null;
   source_union_name: string | null;
-  source_tariff_type: string | null;
+  source_tarif_type: string | null; // ✅ FIX
   source_tariffwerk: string | null;
   source_funktionsgruppe: string | null;
   source_page_number: number | null;
@@ -71,7 +73,7 @@ export interface FeedbackRow {
 
   custom_document_name: string | null;
   custom_union_name: string | null;
-  custom_tariff_type: string | null;
+  custom_tarif_type: string | null; // ✅ FIX
   custom_tariffwerk: string | null;
   custom_funktionsgruppe: string | null;
   custom_page_number: number | null;
