@@ -3,7 +3,8 @@ import { asyncHandler } from "../lib/asyncHandler.js";
 import {
   getDocumentByItemId,
   getDocuments,
-  getDocumentsMeta
+  getDocumentsMeta,
+  pool
 } from "../db.js";
 
 const router = Router();
@@ -77,6 +78,56 @@ router.get(
       },
       count: documents.length,
       documents
+    });
+  })
+);
+
+router.get(
+  "/:itemId/paragraphs",
+  asyncHandler(async (req: Request, res: Response) => {
+    const rawItemId = req.params.itemId;
+
+    const itemId =
+      typeof rawItemId === "string"
+        ? rawItemId
+        : Array.isArray(rawItemId)
+          ? rawItemId[0]
+          : undefined;
+
+    if (!itemId) {
+      return res.status(400).json({
+        ok: false,
+        error: "itemId_required"
+      });
+    }
+
+    const result = await pool.query<{
+      page_number: number | null;
+      paragraph_index: number | null;
+      chunk_text: string;
+    }>(
+      `
+      SELECT
+        p.page_number,
+        p.paragraph_index,
+        p.chunk_text
+      FROM document_paragraphs p
+      INNER JOIN documents d
+        ON d.id = p.document_id
+      WHERE d.item_id = $1
+      ORDER BY
+        p.page_number ASC NULLS LAST,
+        p.paragraph_index ASC NULLS LAST
+      LIMIT 500
+      `,
+      [itemId]
+    );
+
+    return res.json({
+      ok: true,
+      itemId,
+      count: result.rows.length,
+      paragraphs: result.rows
     });
   })
 );
