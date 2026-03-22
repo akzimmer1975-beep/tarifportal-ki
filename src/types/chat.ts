@@ -15,16 +15,7 @@ export interface SourceItem {
   page?: number | null;
   paragraph?: number | null;
   text: string;
-  similarity: number;
-}
-
-export interface StructuredCompareAnswer {
-  topicKey?: string;
-  kurzfazit: string;
-  gdl: string;
-  evg: string;
-  unterschiede: string[];
-  gemeinsamkeiten: string[];
+  similarity?: number | null;
 }
 
 export interface StructuredCompareSection {
@@ -40,6 +31,16 @@ export interface StructuredCompareSection {
 
   gdlSources: SourceItem[];
   evgSources: SourceItem[];
+}
+
+export interface StructuredCompareAnswer {
+  topicKey?: string;
+  kurzfazit: string;
+  gdl: string;
+  evg: string;
+  unterschiede: string[];
+  gemeinsamkeiten: string[];
+  sections?: StructuredCompareSection[];
 }
 
 export interface ChatResponseBody {

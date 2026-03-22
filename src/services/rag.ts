@@ -519,6 +519,7 @@ function summarizeSectionResults(
     ...section.gdlDifferences,
     ...section.evgDifferences
   ]);
+
   const allSimilarities: string[] = [];
 
   const kurzfazit =
@@ -535,11 +536,9 @@ function summarizeSectionResults(
     .join("\n");
 
   sections.forEach((section) => {
-    if (section.gdlText && section.evgText) {
-      const sameHint = section.summary?.trim();
-      if (sameHint) {
-        allSimilarities.push(`${section.title}: ${sameHint}`);
-      }
+    const sameHint = section.summary?.trim();
+    if (sameHint) {
+      allSimilarities.push(`${section.title}: ${sameHint}`);
     }
   });
 
@@ -549,7 +548,8 @@ function summarizeSectionResults(
     gdl,
     evg,
     unterschiede: dedupeStrings(allDifferences),
-    gemeinsamkeiten: dedupeStrings(allSimilarities)
+    gemeinsamkeiten: dedupeStrings(allSimilarities),
+    sections
   };
 }
 
@@ -594,6 +594,20 @@ function formatHierarchicalAnswer(
   return parts.join("\n\n");
 }
 
+function isBroadCompareQuery(query: string): boolean {
+  const q = query.toLowerCase();
+
+  return (
+    q.includes("vergleich") ||
+    q.includes("unterschied") ||
+    q.includes("unterschiede") ||
+    q.includes("gegenüber") ||
+    q.includes("gdl und evg") ||
+    q.includes("evg und gdl") ||
+    q.length > 35
+  );
+}
+
 export async function answerWithRag(
   query: string,
   options: AnswerWithRagOptions = {}
@@ -607,8 +621,12 @@ export async function answerWithRag(
   if (options.compareUnions) {
     const topic = detectMainTopic(trimmedQuery);
     const topicSections = getSectionsForTopic(topic);
+    const shouldBuildSections =
+      topic !== "unknown" &&
+      topicSections.length > 0 &&
+      isBroadCompareQuery(trimmedQuery);
 
-    if (topic !== "unknown" && topicSections.length > 0) {
+    if (shouldBuildSections) {
       const sections = await Promise.all(
         topicSections.map((section) => buildSectionCompare(trimmedQuery, section))
       );
@@ -671,7 +689,8 @@ export async function answerWithRag(
         ...compare.gdl_unterschiede,
         ...compare.evg_unterschiede
       ]),
-      gemeinsamkeiten: dedupeStrings(compare.gemeinsamkeiten)
+      gemeinsamkeiten: dedupeStrings(compare.gemeinsamkeiten),
+      sections: []
     };
 
     return {
