@@ -178,7 +178,7 @@ export async function initDb(): Promise<void> {
 
         source_document_name TEXT,
         source_union_name TEXT,
-        source_tarif_type TEXT,
+        source_tariff_type TEXT,
         source_tariffwerk TEXT,
         source_funktionsgruppe TEXT,
         source_page_number INT,
@@ -188,7 +188,7 @@ export async function initDb(): Promise<void> {
 
         custom_document_name TEXT,
         custom_union_name TEXT,
-        custom_tarif_type TEXT,
+        custom_tariff_type TEXT,
         custom_tariffwerk TEXT,
         custom_funktionsgruppe TEXT,
         custom_page_number INT,
@@ -215,8 +215,8 @@ export async function initDb(): Promise<void> {
     `);
 
     await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_documents_tarif_type
-      ON documents(tarif_type);
+      CREATE INDEX IF NOT EXISTS idx_documents_tariff_type
+      ON documents(tariff_type);
     `);
 
     await client.query(`
@@ -287,7 +287,7 @@ export async function getDocuments(
 
   if (options.tariffType?.trim()) {
     params.push(options.tariffType.trim());
-    where.push(`tarif_type = $${params.length}`);
+    where.push(`tariff_type = $${params.length}`);
   }
 
   if (options.tariffwerk?.trim()) {
@@ -307,7 +307,7 @@ export async function getDocuments(
       name ILIKE ${qParam}
       OR path ILIKE ${qParam}
       OR COALESCE(union_name, '') ILIKE ${qParam}
-      OR COALESCE(tarif_type, '') ILIKE ${qParam}
+      OR COALESCE(tariff_type, '') ILIKE ${qParam}
       OR COALESCE(tariffwerk, '') ILIKE ${qParam}
       OR COALESCE(funktionsgruppe, '') ILIKE ${qParam}
     )`);
@@ -322,7 +322,7 @@ export async function getDocuments(
       name,
       path,
       union_name,
-      tarif_type,
+      tariff_type,
       tariffwerk,
       funktionsgruppe,
       stand,
@@ -357,7 +357,7 @@ export async function getDocumentsMeta(_options?: unknown): Promise<DocumentRow[
       name,
       path,
       union_name,
-      tarif_type,
+      tariff_type,
       tariffwerk,
       funktionsgruppe,
       stand,
@@ -392,7 +392,7 @@ export async function getDocumentByItemId(
         name,
         path,
         union_name,
-        tarif_type,
+        tariff_type,
         tariffwerk,
         funktionsgruppe,
         stand,
@@ -438,7 +438,7 @@ export async function upsertDocuments(
             name,
             path,
             union_name,
-            tarif_type,
+            tariff_type,
             tariffwerk,
             funktionsgruppe,
             stand,
@@ -469,7 +469,7 @@ export async function upsertDocuments(
             name = EXCLUDED.name,
             path = EXCLUDED.path,
             union_name = EXCLUDED.union_name,
-            tarif_type = EXCLUDED.tarif_type,
+            tariff_type = EXCLUDED.tariff_type,
             tariffwerk = EXCLUDED.tariffwerk,
             funktionsgruppe = EXCLUDED.funktionsgruppe,
             stand = EXCLUDED.stand,
@@ -488,7 +488,7 @@ export async function upsertDocuments(
             name,
             path,
             union_name,
-            tarif_type,
+            tariff_type,
             tariffwerk,
             funktionsgruppe,
             stand,
@@ -508,7 +508,7 @@ export async function upsertDocuments(
           doc.name,
           doc.path,
           doc.union ?? null,
-          doc.tarifType ?? null,
+          doc.tariffType ?? null,
           doc.tariffwerk ?? null,
           doc.funktionsgruppe ?? null,
           doc.stand ?? null,
