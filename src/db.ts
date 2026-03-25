@@ -23,7 +23,7 @@ export type DocumentRow = {
   name: string;
   path: string;
   union_name: string | null;
-  tarif_type: string | null;
+  tariff_type: string | null;
   tariffwerk: string | null;
   funktionsgruppe: string | null;
   stand: string | null;
@@ -44,7 +44,7 @@ export type DocumentMetaInput = {
   name: string;
   path: string;
   union?: string | null;
-  tarifType?: string | null;
+  tariffType?: string | null;
   tariffwerk?: string | null;
   funktionsgruppe?: string | null;
   stand?: string | null;
@@ -126,7 +126,7 @@ export async function initDb(): Promise<void> {
         name TEXT NOT NULL,
         path TEXT NOT NULL,
         union_name TEXT,
-        tarif_type TEXT,
+        tariff_type TEXT,
         tariffwerk TEXT,
         funktionsgruppe TEXT,
         stand TEXT,
