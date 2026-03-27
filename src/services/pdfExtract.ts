@@ -132,7 +132,7 @@ function clusterItemsToLines(items: LineItem[]): ReconstructedLine[] {
     }
   }
 
-  const reconstructed = lines
+  return lines
     .map((line) => {
       const sortedItems = [...line.items].sort((a, b) => a.x - b.x);
 
@@ -170,61 +170,166 @@ function clusterItemsToLines(items: LineItem[]): ReconstructedLine[] {
     })
     .filter((line) => line.text.length > 0)
     .sort((a, b) => b.y - a.y);
+}
 
-  return reconstructed;
+function isPageFooter(line: string): boolean {
+  const text = line.trim();
+
+  return (
+    /^Seite\s+\d+\s+von\s+\d+$/i.test(text) ||
+    /^-\s*\d+\s*-$/i.test(text) ||
+    /^\d+\s*\/\s*\d+$/.test(text)
+  );
+}
+
+function isSectionHeader(line: string): boolean {
+  return /^Abschnitt\s+[IVXLC0-9]+$/i.test(line.trim());
+}
+
+function isParagraphHeader(line: string): boolean {
+  return /^§\s*\d+[a-zA-Z]*$/.test(line.trim());
+}
+
+function isLikelyTitleLine(line: string): boolean {
+  const text = line.trim();
+
+  if (!text) return false;
+  if (text.length > 120) return false;
+  if (/[.:;]$/.test(text)) return false;
+  if (/^\(\d+\)/.test(text)) return false;
+  if (/^[a-z]\)/.test(text)) return false;
+  if (/^[a-z]{2}\)/.test(text)) return false;
+  if (/^[a-z]{3}\)/.test(text)) return false;
+  if (/^[–-]\s+/.test(text)) return false;
+  if (/^§\s*\d+/.test(text)) return false;
+  if (/^Abschnitt\s+[IVXLC0-9]+/i.test(text)) return false;
+
+  return true;
+}
+
+function shouldStartNewBlock(line: string): boolean {
+  const text = line.trim();
+
+  return (
+    isParagraphHeader(text) ||
+    isSectionHeader(text) ||
+    /^\(\d+\)/.test(text) ||
+    /^[a-z]\)/.test(text) ||
+    /^[a-z]{2}\)/.test(text) ||
+    /^[a-z]{3}\)/.test(text) ||
+    /^[–-]\s+/.test(text)
+  );
 }
 
 function linesToBlocks(lines: ReconstructedLine[]): string[] {
   if (lines.length === 0) return [];
 
+  const filteredLines = lines
+    .map((line) => ({ ...line, text: line.text.trim() }))
+    .filter((line) => line.text.length > 0)
+    .filter((line) => !isPageFooter(line.text));
+
+  if (filteredLines.length === 0) return [];
+
   const blocks: string[] = [];
   let currentBlock: string[] = [];
   let previousY: number | null = null;
 
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    const nextLine = lines[i + 1] ?? null;
-
-    if (currentBlock.length === 0) {
-      currentBlock.push(line.text);
-      previousY = line.y;
-      continue;
-    }
-
+  for (let i = 0; i < filteredLines.length; i += 1) {
+    const line = filteredLines[i];
+    const prevText = currentBlock[currentBlock.length - 1] ?? "";
     const yGap = previousY !== null ? Math.abs(previousY - line.y) : 0;
-    const lineStartsNewStructure =
-      /^§\s*\d+/.test(line.text) ||
-      /^Abschnitt\s+[IVXLC0-9]+/i.test(line.text) ||
-      /^\(\d+\)/.test(line.text) ||
-      /^[a-z]\)/.test(line.text) ||
-      /^[a-z]{2}\)/.test(line.text) ||
-      /^[a-z]{3}\)/.test(line.text) ||
-      /^[–-]\s+/.test(line.text);
 
-    const previousEndsHard =
-      currentBlock.length > 0 &&
-      /[:.;]$/.test(currentBlock[currentBlock.length - 1]);
+    const newStructure = shouldStartNewBlock(line.text);
 
     const shouldBreak =
-      yGap > 14 ||
-      (lineStartsNewStructure && previousEndsHard) ||
-      (lineStartsNewStructure && yGap > 8);
+      currentBlock.length > 0 &&
+      (yGap > 16 || (newStructure && yGap > 7));
 
     if (shouldBreak) {
       blocks.push(normalizeBlockText(currentBlock.join("\n")));
       currentBlock = [line.text];
     } else {
-      currentBlock.push(line.text);
+      if (
+        currentBlock.length > 0 &&
+        prevText.endsWith("-") &&
+        /^[a-zäöü]/.test(line.text)
+      ) {
+        currentBlock[currentBlock.length - 1] =
+          prevText.slice(0, -1) + line.text;
+      } else {
+        currentBlock.push(line.text);
+      }
     }
 
     previousY = line.y;
+  }
 
-    if (!nextLine && currentBlock.length > 0) {
-      blocks.push(normalizeBlockText(currentBlock.join("\n")));
-    }
+  if (currentBlock.length > 0) {
+    blocks.push(normalizeBlockText(currentBlock.join("\n")));
   }
 
   return blocks.filter(Boolean);
+}
+
+function mergeHeadingBlocks(blocks: string[]): string[] {
+  const merged: string[] = [];
+
+  for (let i = 0; i < blocks.length; i += 1) {
+    const current = normalizeBlockText(blocks[i]);
+    const next = normalizeBlockText(blocks[i + 1] ?? "");
+
+    if (!current) continue;
+
+    if (isParagraphHeader(current) && next && isLikelyTitleLine(next)) {
+      const combined = normalizeBlockText(`${current} ${next}`);
+      merged.push(combined);
+      i += 1;
+      continue;
+    }
+
+    if (isSectionHeader(current) && next && isLikelyTitleLine(next)) {
+      const combined = normalizeBlockText(`${current} ${next}`);
+      merged.push(combined);
+      i += 1;
+      continue;
+    }
+
+    merged.push(current);
+  }
+
+  return merged;
+}
+
+function mergeHeadingWithBody(blocks: string[]): string[] {
+  const merged: string[] = [];
+
+  for (let i = 0; i < blocks.length; i += 1) {
+    const current = normalizeBlockText(blocks[i]);
+    const next = normalizeBlockText(blocks[i + 1] ?? "");
+
+    if (!current) continue;
+
+    const currentIsHeading =
+      /^§\s*\d+[a-zA-Z]*(\s+.+)?$/.test(current) ||
+      /^Abschnitt\s+[IVXLC0-9]+(\s+.+)?$/i.test(current);
+
+    const nextStartsStructure = shouldStartNewBlock(next);
+    const nextLooksBody =
+      next.length > 0 &&
+      !nextStartsStructure &&
+      !isPageFooter(next);
+
+    if (currentIsHeading && nextLooksBody) {
+      merged.push(normalizeBlockText(`${current}\n${next}`));
+      i += 1;
+      continue;
+    }
+
+    merged.push(current);
+  }
+
+  return merged;
 }
 
 function splitLargeBlockByStructure(block: string): string[] {
@@ -233,7 +338,7 @@ function splitLargeBlockByStructure(block: string): string[] {
   if (!text) return [];
 
   const markerRegex =
-    /(?=^§\s*\d+)|(?=^Abschnitt\s+[IVXLC0-9]+)|(?=^\(\d+\))|(?=^[a-z]\))|(?=^[a-z]{2}\))|(?=^[a-z]{3}\))|(?=^[–-]\s+)/gm;
+    /(?=^\(\d+\))|(?=^[a-z]\))|(?=^[a-z]{2}\))|(?=^[a-z]{3}\))|(?=^[–-]\s+)/gm;
 
   const indices = Array.from(text.matchAll(markerRegex))
     .map((match) => match.index ?? 0)
@@ -267,26 +372,31 @@ function buildStructuredParagraphsFromPage(pageText: string): string[] {
   const rawLines = normalized
     .split("\n")
     .map((line) => line.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((line) => !isPageFooter(line));
+
+  if (rawLines.length === 0) return [];
 
   const preliminaryBlocks: string[] = [];
   let current: string[] = [];
 
   for (const line of rawLines) {
-    const startsStructuralUnit =
-      /^§\s*\d+/.test(line) ||
-      /^Abschnitt\s+[IVXLC0-9]+/i.test(line) ||
-      /^\(\d+\)/.test(line) ||
-      /^[a-z]\)/.test(line) ||
-      /^[a-z]{2}\)/.test(line) ||
-      /^[a-z]{3}\)/.test(line) ||
-      /^[–-]\s+/.test(line);
+    const startsStructuralUnit = shouldStartNewBlock(line);
 
     if (startsStructuralUnit && current.length > 0) {
       preliminaryBlocks.push(normalizeBlockText(current.join("\n")));
       current = [line];
     } else {
-      current.push(line);
+      if (
+        current.length > 0 &&
+        current[current.length - 1].endsWith("-") &&
+        /^[a-zäöü]/.test(line)
+      ) {
+        current[current.length - 1] =
+          current[current.length - 1].slice(0, -1) + line;
+      } else {
+        current.push(line);
+      }
     }
   }
 
@@ -294,11 +404,25 @@ function buildStructuredParagraphsFromPage(pageText: string): string[] {
     preliminaryBlocks.push(normalizeBlockText(current.join("\n")));
   }
 
-  const finalBlocks = preliminaryBlocks.flatMap((block) =>
-    splitLargeBlockByStructure(block)
-  );
+  const afterHeadingMerge = mergeHeadingBlocks(preliminaryBlocks);
+  const afterBodyMerge = mergeHeadingWithBody(afterHeadingMerge);
 
-  return finalBlocks.filter((block) => block.length > 0);
+  const finalBlocks = afterBodyMerge.flatMap((block) => {
+    const isHeading =
+      /^§\s*\d+[a-zA-Z]*(\s+.+)?$/.test(block) ||
+      /^Abschnitt\s+[IVXLC0-9]+(\s+.+)?$/i.test(block);
+
+    if (isHeading) {
+      return [block];
+    }
+
+    return splitLargeBlockByStructure(block);
+  });
+
+  return finalBlocks
+    .map((block) => normalizeBlockText(block))
+    .filter((block) => block.length > 0)
+    .filter((block) => !isPageFooter(block));
 }
 
 export async function extractPdf(pdfPath: string): Promise<string[]> {
@@ -346,6 +470,7 @@ export async function saveParagraphs(
       const normalizedChunk = normalizeBlockText(chunkText);
 
       if (!normalizedChunk) continue;
+      if (isPageFooter(normalizedChunk)) continue;
 
       paragraphs.push({
         documentId,
