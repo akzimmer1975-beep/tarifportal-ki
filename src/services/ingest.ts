@@ -1,8 +1,10 @@
-import { upsertDocuments } from "../db.js";
+import { upsertDocuments, pool } from "../db.js";
 import {
   scanTarifportal as scanTarifportalFromGraph,
   type TarifFileRecord
 } from "./graphDrive.js";
+import { downloadPdf } from "./pdfDownload.js";
+import { extractPdf, saveParagraphs } from "./pdfExtract.js";
 
 export type ScannedPdf = TarifFileRecord;
 
@@ -60,52 +62,63 @@ export async function ingestTarifportalToDb() {
   };
 }
 
-import { downloadPdf } from "./pdfDownload.js";
-import { extractPdf, saveParagraphs } from "./pdfExtract.js";
-import { pool } from "../db.js";
+type ExtractDocumentRow = {
+  id: number | string;
+  item_id: string;
+  name: string;
+};
 
 export async function extractAllDocuments() {
-
-  const result = await pool.query(`
-    SELECT id,item_id,name
+  const result = await pool.query<ExtractDocumentRow>(`
+    SELECT id, item_id, name
     FROM documents
     WHERE text_extracted_at IS NULL
+    ORDER BY id ASC
   `);
 
-  const results = [];
+  const results: Array<{
+    itemId: string;
+    documentId?: number;
+    paragraphs?: number;
+    error?: string;
+  }> = [];
 
   for (const doc of result.rows) {
-
     try {
+      const documentId = Number(doc.id);
+
+      if (!Number.isFinite(documentId)) {
+        throw new Error(`Ungültige document id: ${String(doc.id)}`);
+      }
 
       const filePath = await downloadPdf(doc.item_id, doc.name);
-
       const pages = await extractPdf(filePath);
 
       const paragraphs = await saveParagraphs(
-        doc.id,
+        documentId,
         doc.item_id,
         pages
       );
 
-      await pool.query(`
+      await pool.query(
+        `
         UPDATE documents
         SET text_extracted_at = NOW()
-        WHERE id=$1
-      `,[doc.id]);
+        WHERE id = $1
+        `,
+        [documentId]
+      );
 
       results.push({
         itemId: doc.item_id,
+        documentId,
         paragraphs
       });
-
-    } catch (err:any) {
-
+    } catch (err: any) {
       results.push({
         itemId: doc.item_id,
-        error: err.message
+        error: err?.message ?? "Unbekannter Fehler"
       });
-
     }
   }
 
@@ -115,4 +128,3 @@ export async function extractAllDocuments() {
     results
   };
 }
-
