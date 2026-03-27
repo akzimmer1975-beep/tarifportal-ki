@@ -28,8 +28,16 @@ type ApiParagraphSection = {
 type ApiParagraph = {
   page_number: number | null;
   paragraph_index: number | null;
+  title: string | null;
   full_text: string;
   sections: ApiParagraphSection[];
+};
+
+type WorkingBlock = {
+  page_number: number | null;
+  paragraph_index: number | null;
+  title: string | null;
+  lines: string[];
 };
 
 function normalizeWhitespace(value: string | null | undefined): string {
@@ -41,14 +49,55 @@ function normalizeWhitespace(value: string | null | undefined): string {
     .trim();
 }
 
-function mergeChunkTexts(chunks: string[]): string {
-  const cleaned = chunks
-    .map((chunk) => normalizeWhitespace(chunk))
-    .filter(Boolean);
+function normalizeLine(value: string | null | undefined): string {
+  return normalizeWhitespace(value).replace(/\n+/g, " ").trim();
+}
 
-  if (cleaned.length === 0) return "";
+function isSectionHeader(line: string): boolean {
+  return /^Abschnitt\s+[IVXLC0-9]+(?:\s+.+)?$/i.test(line.trim());
+}
 
-  return cleaned.join("\n\n").trim();
+function isParagraphHeader(line: string): boolean {
+  return /^§\s*\d+[a-zA-Z]*(?:\s+.+)?$/.test(line.trim());
+}
+
+function isPureParagraphHeader(line: string): boolean {
+  return /^§\s*\d+[a-zA-Z]*$/.test(line.trim());
+}
+
+function isPureSectionHeader(line: string): boolean {
+  return /^Abschnitt\s+[IVXLC0-9]+$/i.test(line.trim());
+}
+
+function isLikelyTitleLine(line: string): boolean {
+  const text = line.trim();
+
+  if (!text) return false;
+  if (text.length > 140) return false;
+  if (/[.;:]$/.test(text)) return false;
+  if (/^\(\d+\)/.test(text)) return false;
+  if (/^[a-z]\)/.test(text)) return false;
+  if (/^[a-z]{2}\)/.test(text)) return false;
+  if (/^[a-z]{3}\)/.test(text)) return false;
+  if (/^[–-]\s+/.test(text)) return false;
+  if (isParagraphHeader(text)) return false;
+  if (isSectionHeader(text)) return false;
+
+  return true;
+}
+
+function startsStructuralUnit(line: string): boolean {
+  const text = line.trim();
+
+  return (
+    isParagraphHeader(text) ||
+    isSectionHeader(text) ||
+    /^\(\d+\)/.test(text) ||
+    /^[a-z]\)/.test(text) ||
+    /^[a-z]{2}\)/.test(text) ||
+    /^[a-z]{3}\)/.test(text) ||
+    /^[–-]\s+/.test(text)
+  );
 }
 
 function getSectionLevel(label: string): number {
@@ -56,7 +105,40 @@ function getSectionLevel(label: string): number {
   if (/^[a-z]\)$/.test(label)) return 2;
   if (/^[a-z]{2}\)$/.test(label)) return 3;
   if (/^[a-z]{3}\)$/.test(label)) return 4;
+  if (/^[–-]$/.test(label)) return 5;
   return 9;
+}
+
+function splitChunkToLines(chunk: string): string[] {
+  return normalizeWhitespace(chunk)
+    .split("\n")
+    .map((line) => normalizeLine(line))
+    .filter(Boolean);
+}
+
+function mergeHeaderLines(lines: string[]): string[] {
+  const result: string[] = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const current = lines[i];
+    const next = lines[i + 1] ?? "";
+
+    if (isPureParagraphHeader(current) && next && isLikelyTitleLine(next)) {
+      result.push(`${current} ${next}`.trim());
+      i += 1;
+      continue;
+    }
+
+    if (isPureSectionHeader(current) && next && isLikelyTitleLine(next)) {
+      result.push(`${current} ${next}`.trim());
+      i += 1;
+      continue;
+    }
+
+    result.push(current);
+  }
+
+  return result;
 }
 
 function extractStructuredSections(fullText: string): ApiParagraphSection[] {
@@ -64,10 +146,10 @@ function extractStructuredSections(fullText: string): ApiParagraphSection[] {
 
   if (!text) return [];
 
-  const pattern =
-    /(?:^|\n|\s)(\(\d+\)|[a-z]\)|[a-z]{2}\)|[a-z]{3}\))(?=\s)/g;
+  const markerRegex =
+    /(^|\n)(\(\d+\)|[a-z]\)|[a-z]{2}\)|[a-z]{3}\)|[–-])(?=\s)/gm;
 
-  const matches = Array.from(text.matchAll(pattern));
+  const matches = Array.from(text.matchAll(markerRegex));
 
   if (matches.length === 0) {
     return [];
@@ -77,28 +159,186 @@ function extractStructuredSections(fullText: string): ApiParagraphSection[] {
 
   for (let i = 0; i < matches.length; i += 1) {
     const match = matches[i];
-    const label = match[1];
+    const label = match[2];
     const rawIndex = match.index ?? 0;
     const labelStart = rawIndex + match[0].lastIndexOf(label);
-    const contentStart = labelStart + label.length;
     const nextMatch = matches[i + 1];
-    const contentEnd = nextMatch ? (nextMatch.index ?? text.length) : text.length;
+    const sectionEnd = nextMatch ? (nextMatch.index ?? text.length) : text.length;
+    const sectionText = text.slice(labelStart, sectionEnd).trim();
 
-    const rawText = text.slice(contentStart, contentEnd).trim();
-
-    if (!rawText) continue;
+    if (!sectionText) continue;
 
     sections.push({
       id: `${label}-${i + 1}`,
       label,
-      text: rawText,
+      text: sectionText,
       level: getSectionLevel(label),
-      start_offset: contentStart,
-      end_offset: contentEnd
+      start_offset: labelStart,
+      end_offset: sectionEnd
     });
   }
 
   return sections;
+}
+
+function buildTariffBlocks(rows: ParagraphRow[]): ApiParagraph[] {
+  const blocks: WorkingBlock[] = [];
+  let currentBlock: WorkingBlock | null = null;
+
+  function flushCurrentBlock() {
+    if (!currentBlock) return;
+
+    const mergedLines = mergeHeaderLines(currentBlock.lines);
+    const fullText = normalizeWhitespace(mergedLines.join("\n"));
+
+    if (!fullText) {
+      currentBlock = null;
+      return;
+    }
+
+    const title =
+      currentBlock.title ??
+      (isParagraphHeader(mergedLines[0] ?? "")
+        ? mergedLines[0]
+        : isSectionHeader(mergedLines[0] ?? "")
+          ? mergedLines[0]
+          : null);
+
+    blocks.push({
+      page_number: currentBlock.page_number,
+      paragraph_index: currentBlock.paragraph_index,
+      title,
+      lines: mergedLines
+    });
+
+    currentBlock = null;
+  }
+
+  for (const row of rows) {
+    const lines = splitChunkToLines(row.chunk_text);
+
+    if (lines.length === 0) {
+      continue;
+    }
+
+    const mergedLines = mergeHeaderLines(lines);
+    const firstLine = mergedLines[0] ?? "";
+    const firstLineStartsStructure = startsStructuralUnit(firstLine);
+    const firstLineIsHeader = isParagraphHeader(firstLine) || isSectionHeader(firstLine);
+
+    if (!currentBlock) {
+      currentBlock = {
+        page_number: row.page_number,
+        paragraph_index: row.paragraph_index,
+        title: firstLineIsHeader ? firstLine : null,
+        lines: [...mergedLines]
+      };
+      continue;
+    }
+
+    const currentStartsWithHeader =
+      currentBlock.lines.length > 0 &&
+      (isParagraphHeader(currentBlock.lines[0]) || isSectionHeader(currentBlock.lines[0]));
+
+    const shouldStartNewBlock =
+      firstLineIsHeader ||
+      (firstLineStartsStructure && !currentStartsWithHeader) ||
+      (firstLineStartsStructure &&
+        currentBlock.lines.length > 0 &&
+        /[.;:]$/.test(currentBlock.lines[currentBlock.lines.length - 1] ?? ""));
+
+    if (shouldStartNewBlock) {
+      flushCurrentBlock();
+
+      currentBlock = {
+        page_number: row.page_number,
+        paragraph_index: row.paragraph_index,
+        title: firstLineIsHeader ? firstLine : null,
+        lines: [...mergedLines]
+      };
+
+      continue;
+    }
+
+    currentBlock.lines.push(...mergedLines);
+  }
+
+  flushCurrentBlock();
+
+  const mergedBlocks: ApiParagraph[] = [];
+  let pendingSectionHeader: WorkingBlock | null = null;
+
+  for (const block of blocks) {
+    const fullText = normalizeWhitespace(block.lines.join("\n"));
+    const title = block.title ?? null;
+
+    if (!fullText) continue;
+
+    const blockIsSectionHeader =
+      title !== null &&
+      isSectionHeader(title) &&
+      block.lines.length <= 2 &&
+      !extractStructuredSections(fullText).length;
+
+    const blockIsParagraphHeader =
+      title !== null && isParagraphHeader(title);
+
+    if (blockIsSectionHeader) {
+      pendingSectionHeader = block;
+      continue;
+    }
+
+    if (pendingSectionHeader && blockIsParagraphHeader) {
+      const combinedLines = [...pendingSectionHeader.lines, ...block.lines];
+      const combinedFullText = normalizeWhitespace(combinedLines.join("\n"));
+
+      mergedBlocks.push({
+        page_number: pendingSectionHeader.page_number ?? block.page_number,
+        paragraph_index: pendingSectionHeader.paragraph_index ?? block.paragraph_index,
+        title: normalizeLine(
+          `${pendingSectionHeader.title ?? ""} ${block.title ?? ""}`.trim()
+        ),
+        full_text: combinedFullText,
+        sections: extractStructuredSections(combinedFullText)
+      });
+
+      pendingSectionHeader = null;
+      continue;
+    }
+
+    if (pendingSectionHeader) {
+      const pendingFullText = normalizeWhitespace(pendingSectionHeader.lines.join("\n"));
+      mergedBlocks.push({
+        page_number: pendingSectionHeader.page_number,
+        paragraph_index: pendingSectionHeader.paragraph_index,
+        title: pendingSectionHeader.title,
+        full_text: pendingFullText,
+        sections: extractStructuredSections(pendingFullText)
+      });
+      pendingSectionHeader = null;
+    }
+
+    mergedBlocks.push({
+      page_number: block.page_number,
+      paragraph_index: block.paragraph_index,
+      title,
+      full_text: fullText,
+      sections: extractStructuredSections(fullText)
+    });
+  }
+
+  if (pendingSectionHeader) {
+    const pendingFullText = normalizeWhitespace(pendingSectionHeader.lines.join("\n"));
+    mergedBlocks.push({
+      page_number: pendingSectionHeader.page_number,
+      paragraph_index: pendingSectionHeader.paragraph_index,
+      title: pendingSectionHeader.title,
+      full_text: pendingFullText,
+      sections: extractStructuredSections(pendingFullText)
+    });
+  }
+
+  return mergedBlocks.filter((block) => block.full_text.trim().length > 0);
 }
 
 router.get(
@@ -208,49 +448,12 @@ router.get(
         p.page_number ASC NULLS LAST,
         p.paragraph_index ASC NULLS LAST,
         p.id ASC
-      LIMIT 5000
+      LIMIT 10000
       `,
       [itemId]
     );
 
-    const groupedMap = new Map<
-      string,
-      {
-        page_number: number | null;
-        paragraph_index: number | null;
-        chunks: string[];
-      }
-    >();
-
-    for (const row of result.rows) {
-      const key = `${row.page_number ?? "null"}::${row.paragraph_index ?? "null"}`;
-      const existing = groupedMap.get(key);
-
-      if (!existing) {
-        groupedMap.set(key, {
-          page_number: row.page_number,
-          paragraph_index: row.paragraph_index,
-          chunks: [row.chunk_text]
-        });
-        continue;
-      }
-
-      existing.chunks.push(row.chunk_text);
-    }
-
-    const paragraphs: ApiParagraph[] = Array.from(groupedMap.values()).map(
-      (group) => {
-        const fullText = mergeChunkTexts(group.chunks);
-        const sections = extractStructuredSections(fullText);
-
-        return {
-          page_number: group.page_number,
-          paragraph_index: group.paragraph_index,
-          full_text: fullText,
-          sections
-        };
-      }
-    );
+    const paragraphs = buildTariffBlocks(result.rows);
 
     return res.json({
       ok: true,
