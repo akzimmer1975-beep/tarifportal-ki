@@ -53,6 +53,13 @@ function normalizeLine(value: string | null | undefined): string {
   return normalizeWhitespace(value).replace(/\n+/g, " ").trim();
 }
 
+function splitChunkToLines(chunk: string): string[] {
+  return normalizeWhitespace(chunk)
+    .split("\n")
+    .map((line) => normalizeLine(line))
+    .filter(Boolean);
+}
+
 function isSectionHeader(line: string): boolean {
   return /^Abschnitt\s+[IVXLC0-9]+(?:\s+.+)?$/i.test(line.trim());
 }
@@ -69,51 +76,64 @@ function isPureSectionHeader(line: string): boolean {
   return /^Abschnitt\s+[IVXLC0-9]+$/i.test(line.trim());
 }
 
+function isNumericSection(line: string): boolean {
+  return /^\(\d+\)/.test(line.trim());
+}
+
+function isAlphaSection(line: string): boolean {
+  return /^[a-z]\)/.test(line.trim());
+}
+
+function isDoubleAlphaSection(line: string): boolean {
+  return /^[a-z]{2}\)/.test(line.trim());
+}
+
+function isTripleAlphaSection(line: string): boolean {
+  return /^[a-z]{3}\)/.test(line.trim());
+}
+
+function isBulletSection(line: string): boolean {
+  return /^[–-]\s+/.test(line.trim());
+}
+
+function isAnySectionStart(line: string): boolean {
+  return (
+    isNumericSection(line) ||
+    isAlphaSection(line) ||
+    isDoubleAlphaSection(line) ||
+    isTripleAlphaSection(line) ||
+    isBulletSection(line)
+  );
+}
+
+function isMainBlockStarter(line: string): boolean {
+  return (
+    isParagraphHeader(line) ||
+    isSectionHeader(line) ||
+    isNumericSection(line)
+  );
+}
+
+function isSubSectionStarter(line: string): boolean {
+  return (
+    isAlphaSection(line) ||
+    isDoubleAlphaSection(line) ||
+    isTripleAlphaSection(line) ||
+    isBulletSection(line)
+  );
+}
+
 function isLikelyTitleLine(line: string): boolean {
   const text = line.trim();
 
   if (!text) return false;
   if (text.length > 140) return false;
   if (/[.;:]$/.test(text)) return false;
-  if (/^\(\d+\)/.test(text)) return false;
-  if (/^[a-z]\)/.test(text)) return false;
-  if (/^[a-z]{2}\)/.test(text)) return false;
-  if (/^[a-z]{3}\)/.test(text)) return false;
-  if (/^[–-]\s+/.test(text)) return false;
   if (isParagraphHeader(text)) return false;
   if (isSectionHeader(text)) return false;
+  if (isAnySectionStart(text)) return false;
 
   return true;
-}
-
-function startsStructuralUnit(line: string): boolean {
-  const text = line.trim();
-
-  return (
-    isParagraphHeader(text) ||
-    isSectionHeader(text) ||
-    /^\(\d+\)/.test(text) ||
-    /^[a-z]\)/.test(text) ||
-    /^[a-z]{2}\)/.test(text) ||
-    /^[a-z]{3}\)/.test(text) ||
-    /^[–-]\s+/.test(text)
-  );
-}
-
-function getSectionLevel(label: string): number {
-  if (/^\(\d+\)$/.test(label)) return 1;
-  if (/^[a-z]\)$/.test(label)) return 2;
-  if (/^[a-z]{2}\)$/.test(label)) return 3;
-  if (/^[a-z]{3}\)$/.test(label)) return 4;
-  if (/^[–-]$/.test(label)) return 5;
-  return 9;
-}
-
-function splitChunkToLines(chunk: string): string[] {
-  return normalizeWhitespace(chunk)
-    .split("\n")
-    .map((line) => normalizeLine(line))
-    .filter(Boolean);
 }
 
 function mergeHeaderLines(lines: string[]): string[] {
@@ -139,6 +159,15 @@ function mergeHeaderLines(lines: string[]): string[] {
   }
 
   return result;
+}
+
+function getSectionLevel(label: string): number {
+  if (/^\(\d+\)$/.test(label)) return 1;
+  if (/^[a-z]\)$/.test(label)) return 2;
+  if (/^[a-z]{2}\)$/.test(label)) return 3;
+  if (/^[a-z]{3}\)$/.test(label)) return 4;
+  if (/^[–-]$/.test(label)) return 5;
+  return 9;
 }
 
 function extractStructuredSections(fullText: string): ApiParagraphSection[] {
@@ -182,7 +211,7 @@ function extractStructuredSections(fullText: string): ApiParagraphSection[] {
 }
 
 function buildTariffBlocks(rows: ParagraphRow[]): ApiParagraph[] {
-  const blocks: WorkingBlock[] = [];
+  const sourceBlocks: WorkingBlock[] = [];
   let currentBlock: WorkingBlock | null = null;
 
   function flushCurrentBlock() {
@@ -204,7 +233,7 @@ function buildTariffBlocks(rows: ParagraphRow[]): ApiParagraph[] {
           ? mergedLines[0]
           : null);
 
-    blocks.push({
+    sourceBlocks.push({
       page_number: currentBlock.page_number,
       paragraph_index: currentBlock.paragraph_index,
       title,
@@ -215,66 +244,54 @@ function buildTariffBlocks(rows: ParagraphRow[]): ApiParagraph[] {
   }
 
   for (const row of rows) {
-    const lines = splitChunkToLines(row.chunk_text);
+    const rawLines = splitChunkToLines(row.chunk_text);
+    if (rawLines.length === 0) continue;
 
-    if (lines.length === 0) {
-      continue;
-    }
-
-    const mergedLines = mergeHeaderLines(lines);
-    const firstLine = mergedLines[0] ?? "";
-    const firstLineStartsStructure = startsStructuralUnit(firstLine);
-    const firstLineIsHeader = isParagraphHeader(firstLine) || isSectionHeader(firstLine);
+    const lines = mergeHeaderLines(rawLines);
+    const firstLine = lines[0] ?? "";
 
     if (!currentBlock) {
       currentBlock = {
         page_number: row.page_number,
         paragraph_index: row.paragraph_index,
-        title: firstLineIsHeader ? firstLine : null,
-        lines: [...mergedLines]
+        title: isParagraphHeader(firstLine) || isSectionHeader(firstLine) ? firstLine : null,
+        lines: [...lines]
       };
       continue;
     }
 
-    const currentStartsWithHeader =
-      currentBlock.lines.length > 0 &&
-      (isParagraphHeader(currentBlock.lines[0]) || isSectionHeader(currentBlock.lines[0]));
-
-    const shouldStartNewBlock =
-      firstLineIsHeader ||
-      (firstLineStartsStructure && !currentStartsWithHeader) ||
-      (firstLineStartsStructure &&
-        currentBlock.lines.length > 0 &&
-        /[.;:]$/.test(currentBlock.lines[currentBlock.lines.length - 1] ?? ""));
-
-    if (shouldStartNewBlock) {
+    if (isMainBlockStarter(firstLine)) {
       flushCurrentBlock();
 
       currentBlock = {
         page_number: row.page_number,
         paragraph_index: row.paragraph_index,
-        title: firstLineIsHeader ? firstLine : null,
-        lines: [...mergedLines]
+        title: isParagraphHeader(firstLine) || isSectionHeader(firstLine) ? firstLine : null,
+        lines: [...lines]
       };
-
       continue;
     }
 
-    currentBlock.lines.push(...mergedLines);
+    if (isSubSectionStarter(firstLine)) {
+      currentBlock.lines.push(...lines);
+      continue;
+    }
+
+    currentBlock.lines.push(...lines);
   }
 
   flushCurrentBlock();
 
-  const mergedBlocks: ApiParagraph[] = [];
+  const finalBlocks: ApiParagraph[] = [];
   let pendingSectionHeader: WorkingBlock | null = null;
 
-  for (const block of blocks) {
+  for (const block of sourceBlocks) {
     const fullText = normalizeWhitespace(block.lines.join("\n"));
     const title = block.title ?? null;
 
     if (!fullText) continue;
 
-    const blockIsSectionHeader =
+    const blockIsSectionHeaderOnly =
       title !== null &&
       isSectionHeader(title) &&
       block.lines.length <= 2 &&
@@ -283,7 +300,7 @@ function buildTariffBlocks(rows: ParagraphRow[]): ApiParagraph[] {
     const blockIsParagraphHeader =
       title !== null && isParagraphHeader(title);
 
-    if (blockIsSectionHeader) {
+    if (blockIsSectionHeaderOnly) {
       pendingSectionHeader = block;
       continue;
     }
@@ -292,7 +309,7 @@ function buildTariffBlocks(rows: ParagraphRow[]): ApiParagraph[] {
       const combinedLines = [...pendingSectionHeader.lines, ...block.lines];
       const combinedFullText = normalizeWhitespace(combinedLines.join("\n"));
 
-      mergedBlocks.push({
+      finalBlocks.push({
         page_number: pendingSectionHeader.page_number ?? block.page_number,
         paragraph_index: pendingSectionHeader.paragraph_index ?? block.paragraph_index,
         title: normalizeLine(
@@ -308,17 +325,19 @@ function buildTariffBlocks(rows: ParagraphRow[]): ApiParagraph[] {
 
     if (pendingSectionHeader) {
       const pendingFullText = normalizeWhitespace(pendingSectionHeader.lines.join("\n"));
-      mergedBlocks.push({
+
+      finalBlocks.push({
         page_number: pendingSectionHeader.page_number,
         paragraph_index: pendingSectionHeader.paragraph_index,
         title: pendingSectionHeader.title,
         full_text: pendingFullText,
         sections: extractStructuredSections(pendingFullText)
       });
+
       pendingSectionHeader = null;
     }
 
-    mergedBlocks.push({
+    finalBlocks.push({
       page_number: block.page_number,
       paragraph_index: block.paragraph_index,
       title,
@@ -329,7 +348,8 @@ function buildTariffBlocks(rows: ParagraphRow[]): ApiParagraph[] {
 
   if (pendingSectionHeader) {
     const pendingFullText = normalizeWhitespace(pendingSectionHeader.lines.join("\n"));
-    mergedBlocks.push({
+
+    finalBlocks.push({
       page_number: pendingSectionHeader.page_number,
       paragraph_index: pendingSectionHeader.paragraph_index,
       title: pendingSectionHeader.title,
@@ -338,7 +358,7 @@ function buildTariffBlocks(rows: ParagraphRow[]): ApiParagraph[] {
     });
   }
 
-  return mergedBlocks.filter((block) => block.full_text.trim().length > 0);
+  return finalBlocks.filter((block) => block.full_text.trim().length > 0);
 }
 
 router.get(
