@@ -21,17 +21,53 @@ function normalizeText(text: string) {
     .trim();
 }
 
-function splitIntoParagraphs(text: string): string[] {
+/**
+ * 🔥 NEU: Tarifstruktur erkennen
+ */
+function splitTarifStructure(text: string): string[] {
   const normalized = normalizeText(text);
 
   if (!normalized) return [];
 
-  const parts = normalized
-    .split(/\n\s*\n|(?<=[.!?;:])\s+(?=[A-ZÄÖÜ0-9§])/g)
-    .map((p) => p.trim())
-    .filter(Boolean);
+  // 🔑 Strukturmarker im Tarif
+  const markers = [
+    /\(\d+\)/g,     // (1)
+    /[a-z]\)/g,     // a)
+    /[a-z]{2}\)/g,  // aa)
+    /–/g            // Aufzählung
+  ];
 
-  return parts;
+  // Marker positionen sammeln
+  const positions: number[] = [];
+
+  markers.forEach((regex) => {
+    let match;
+    while ((match = regex.exec(normalized)) !== null) {
+      positions.push(match.index);
+    }
+  });
+
+  // sortieren
+  const sorted = [...new Set(positions)].sort((a, b) => a - b);
+
+  if (sorted.length === 0) {
+    return [normalized];
+  }
+
+  const parts: string[] = [];
+
+  for (let i = 0; i < sorted.length; i++) {
+    const start = sorted[i];
+    const end = sorted[i + 1] || normalized.length;
+
+    const chunk = normalized.slice(start, end).trim();
+
+    if (chunk.length > 10) {
+      parts.push(chunk);
+    }
+  }
+
+  return parts.length > 0 ? parts : [normalized];
 }
 
 function getStandardFontDataUrl() {
@@ -89,15 +125,17 @@ export async function saveParagraphs(
 
   for (let p = 0; p < pages.length; p++) {
     const pageNumber = p + 1;
-    const split = splitIntoParagraphs(pages[p]);
 
-    for (const chunkText of split) {
+    // 🔥 NEU: Tarifstruktur statt Satzsplit
+    const parts = splitTarifStructure(pages[p]);
+
+    for (const part of parts) {
       paragraphs.push({
         documentId,
         itemId,
         pageNumber,
         paragraphIndex,
-        chunkText
+        chunkText: part
       });
 
       paragraphIndex++;
