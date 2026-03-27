@@ -9,6 +9,32 @@ import {
 
 const router = Router();
 
+type ParagraphRow = {
+  id: number;
+  page_number: number | null;
+  paragraph_index: number | null;
+  chunk_text: string;
+};
+
+type ParagraphSection = {
+  id: string;
+  db_id: number;
+  page_number: number | null;
+  paragraph_index: number | null;
+  chunk_text: string;
+};
+
+type ParagraphGroup = {
+  page_number: number | null;
+  paragraph_index: number | null;
+  full_text: string;
+  sections: ParagraphSection[];
+};
+
+function normalizeText(value: string | null | undefined): string {
+  return (value ?? "").replace(/\s+/g, " ").trim();
+}
+
 router.get(
   "/meta",
   asyncHandler(async (_req: Request, res: Response) => {
@@ -101,13 +127,10 @@ router.get(
       });
     }
 
-    const result = await pool.query<{
-      page_number: number | null;
-      paragraph_index: number | null;
-      chunk_text: string;
-    }>(
+    const result = await pool.query<ParagraphRow>(
       `
       SELECT
+        p.id,
         p.page_number,
         p.paragraph_index,
         p.chunk_text
@@ -117,17 +140,51 @@ router.get(
       WHERE d.item_id = $1
       ORDER BY
         p.page_number ASC NULLS LAST,
-        p.paragraph_index ASC NULLS LAST
-      LIMIT 500
+        p.paragraph_index ASC NULLS LAST,
+        p.id ASC
+      LIMIT 2000
       `,
       [itemId]
     );
 
+    const groupedMap = new Map<string, ParagraphGroup>();
+
+    for (const row of result.rows) {
+      const key = `${row.page_number ?? "null"}::${row.paragraph_index ?? "null"}`;
+
+      const section: ParagraphSection = {
+        id: String(row.id),
+        db_id: row.id,
+        page_number: row.page_number,
+        paragraph_index: row.paragraph_index,
+        chunk_text: row.chunk_text
+      };
+
+      const existing = groupedMap.get(key);
+
+      if (!existing) {
+        groupedMap.set(key, {
+          page_number: row.page_number,
+          paragraph_index: row.paragraph_index,
+          full_text: normalizeText(row.chunk_text),
+          sections: [section]
+        });
+        continue;
+      }
+
+      existing.sections.push(section);
+
+      const nextText = normalizeText(row.chunk_text);
+      existing.full_text = [existing.full_text, nextText].filter(Boolean).join("\n\n");
+    }
+
+    const paragraphs = Array.from(groupedMap.values());
+
     return res.json({
       ok: true,
       itemId,
-      count: result.rows.length,
-      paragraphs: result.rows
+      count: paragraphs.length,
+      paragraphs
     });
   })
 );

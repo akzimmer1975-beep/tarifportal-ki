@@ -1,87 +1,72 @@
-export type FeedbackTargetType = "source" | "answer" | "custom_source";
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3005";
 
-export type FeedbackType =
-  | "relevant"
-  | "preferred"
-  | "not_relevant"
-  | "answer_good"
-  | "answer_bad"
-  | "sources_good"
-  | "sources_bad"
-  | "custom_source";
-
-// 🔹 Quelle aus System (RAG)
-export interface FeedbackSourceInput {
-  documentName?: string;
-  unionName?: string;
-  tarifType?: string; // ✅ FIX
-  tariffwerk?: string;
-  funktionsgruppe?: string;
+export type FeedbackSourcePayload = {
+  documentName: string;
+  unionName?: string | null;
+  tarifType?: string | null;
+  tariffwerk?: string | null;
+  funktionsgruppe?: string | null;
   pageNumber?: number | null;
   paragraphIndex?: number | null;
-  text?: string;
+
+  text: string; // ausgewählter Abschnitt
+  fullText?: string | null; // ganzer Paragraph
+  sectionIndex?: number | null; // Position des Abschnitts im Paragraphen
+
   similarity?: number | null;
-}
+};
 
-// 🔹 eigene Quelle
-export interface FeedbackCustomSourceInput {
-  documentName?: string;
-  unionName?: string;
-  tarifType?: string; // ✅ FIX
-  tariffwerk?: string;
-  funktionsgruppe?: string;
+export type FeedbackCustomSourcePayload = {
+  documentName: string;
+  unionName?: string | null;
+  tarifType?: string | null;
+  tariffwerk?: string | null;
+  funktionsgruppe?: string | null;
   pageNumber?: number | null;
   paragraphIndex?: number | null;
-  text?: string;
-  comment?: string;
-}
+  text: string;
+  comment?: string | null;
+};
 
-export interface CreateFeedbackBody {
-  queryText: string;
-  normalizedQuery?: string;
-  topicKey?: string;
-  sectionKey?: string;
+export type CreateFeedbackPayload =
+  | {
+      queryText: string;
+      topicKey?: string;
+      sectionKey?: string;
+      targetType: "source";
+      feedbackType: "relevant" | "preferred" | "not_relevant";
+      source: FeedbackSourcePayload;
+      userComment?: string;
+    }
+  | {
+      queryText: string;
+      topicKey?: string;
+      sectionKey?: string;
+      targetType: "custom_source";
+      feedbackType: "custom_source";
+      customSource: FeedbackCustomSourcePayload;
+      userComment?: string;
+    };
 
-  targetType: FeedbackTargetType;
-  feedbackType: FeedbackType;
+export async function sendFeedback(payload: CreateFeedbackPayload) {
+  const res = await fetch(`${API_BASE}/api/feedback`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
 
-  source?: FeedbackSourceInput;
-  customSource?: FeedbackCustomSourceInput;
+  const data = await res.json().catch(() => null);
 
-  answerText?: string;
-  userComment?: string;
-}
+  if (!res.ok || !data?.ok) {
+    const message =
+      data?.errors?.join?.(", ") ||
+      data?.error ||
+      "Feedback konnte nicht gespeichert werden.";
+    throw new Error(message);
+  }
 
-export interface FeedbackRow {
-  id: number;
-  query_text: string;
-  normalized_query: string;
-  topic_key: string | null;
-  section_key: string | null;
-  target_type: FeedbackTargetType;
-  feedback_type: FeedbackType;
-
-  source_document_name: string | null;
-  source_union_name: string | null;
-  source_tarif_type: string | null; // ✅ FIX
-  source_tariffwerk: string | null;
-  source_funktionsgruppe: string | null;
-  source_page_number: number | null;
-  source_paragraph_index: number | null;
-  source_text: string | null;
-  source_similarity: number | null;
-
-  custom_document_name: string | null;
-  custom_union_name: string | null;
-  custom_tarif_type: string | null; // ✅ FIX
-  custom_tariffwerk: string | null;
-  custom_funktionsgruppe: string | null;
-  custom_page_number: number | null;
-  custom_paragraph_index: number | null;
-  custom_text: string | null;
-  custom_comment: string | null;
-
-  answer_text: string | null;
-  user_comment: string | null;
-  created_at: string;
+  return data;
 }

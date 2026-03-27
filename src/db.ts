@@ -178,17 +178,19 @@ export async function initDb(): Promise<void> {
 
         source_document_name TEXT,
         source_union_name TEXT,
-        source_tariff_type TEXT,
+        source_tarif_type TEXT,
         source_tariffwerk TEXT,
         source_funktionsgruppe TEXT,
         source_page_number INT,
         source_paragraph_index INT,
         source_text TEXT,
+        source_full_text TEXT,
+        source_section_index INT,
         source_similarity DOUBLE PRECISION,
 
         custom_document_name TEXT,
         custom_union_name TEXT,
-        custom_tariff_type TEXT,
+        custom_tarif_type TEXT,
         custom_tariffwerk TEXT,
         custom_funktionsgruppe TEXT,
         custom_page_number INT,
@@ -202,6 +204,16 @@ export async function initDb(): Promise<void> {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         query_embedding vector(1536)
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE search_feedback
+      ADD COLUMN IF NOT EXISTS source_full_text TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE search_feedback
+      ADD COLUMN IF NOT EXISTS source_section_index INT;
     `);
 
     await client.query(`
