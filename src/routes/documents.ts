@@ -16,23 +16,89 @@ type ParagraphRow = {
   chunk_text: string;
 };
 
-type ParagraphSection = {
+type ApiParagraphSection = {
   id: string;
-  db_id: number;
-  page_number: number | null;
-  paragraph_index: number | null;
-  chunk_text: string;
+  label: string;
+  text: string;
+  level: number;
+  start_offset: number;
+  end_offset: number;
 };
 
-type ParagraphGroup = {
+type ApiParagraph = {
   page_number: number | null;
   paragraph_index: number | null;
   full_text: string;
-  sections: ParagraphSection[];
+  sections: ApiParagraphSection[];
 };
 
-function normalizeText(value: string | null | undefined): string {
-  return (value ?? "").replace(/\s+/g, " ").trim();
+function normalizeWhitespace(value: string | null | undefined): string {
+  return (value ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\t/g, " ")
+    .replace(/[ \u00A0]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function mergeChunkTexts(chunks: string[]): string {
+  const cleaned = chunks
+    .map((chunk) => normalizeWhitespace(chunk))
+    .filter(Boolean);
+
+  if (cleaned.length === 0) return "";
+
+  return cleaned.join("\n\n").trim();
+}
+
+function getSectionLevel(label: string): number {
+  if (/^\(\d+\)$/.test(label)) return 1;
+  if (/^[a-z]\)$/.test(label)) return 2;
+  if (/^[a-z]{2}\)$/.test(label)) return 3;
+  if (/^[a-z]{3}\)$/.test(label)) return 4;
+  return 9;
+}
+
+function extractStructuredSections(fullText: string): ApiParagraphSection[] {
+  const text = normalizeWhitespace(fullText);
+
+  if (!text) return [];
+
+  const pattern =
+    /(?:^|\n|\s)(\(\d+\)|[a-z]\)|[a-z]{2}\)|[a-z]{3}\))(?=\s)/g;
+
+  const matches = Array.from(text.matchAll(pattern));
+
+  if (matches.length === 0) {
+    return [];
+  }
+
+  const sections: ApiParagraphSection[] = [];
+
+  for (let i = 0; i < matches.length; i += 1) {
+    const match = matches[i];
+    const label = match[1];
+    const rawIndex = match.index ?? 0;
+    const labelStart = rawIndex + match[0].lastIndexOf(label);
+    const contentStart = labelStart + label.length;
+    const nextMatch = matches[i + 1];
+    const contentEnd = nextMatch ? (nextMatch.index ?? text.length) : text.length;
+
+    const rawText = text.slice(contentStart, contentEnd).trim();
+
+    if (!rawText) continue;
+
+    sections.push({
+      id: `${label}-${i + 1}`,
+      label,
+      text: rawText,
+      level: getSectionLevel(label),
+      start_offset: contentStart,
+      end_offset: contentEnd
+    });
+  }
+
+  return sections;
 }
 
 router.get(
@@ -142,43 +208,49 @@ router.get(
         p.page_number ASC NULLS LAST,
         p.paragraph_index ASC NULLS LAST,
         p.id ASC
-      LIMIT 2000
+      LIMIT 5000
       `,
       [itemId]
     );
 
-    const groupedMap = new Map<string, ParagraphGroup>();
+    const groupedMap = new Map<
+      string,
+      {
+        page_number: number | null;
+        paragraph_index: number | null;
+        chunks: string[];
+      }
+    >();
 
     for (const row of result.rows) {
       const key = `${row.page_number ?? "null"}::${row.paragraph_index ?? "null"}`;
-
-      const section: ParagraphSection = {
-        id: String(row.id),
-        db_id: row.id,
-        page_number: row.page_number,
-        paragraph_index: row.paragraph_index,
-        chunk_text: row.chunk_text
-      };
-
       const existing = groupedMap.get(key);
 
       if (!existing) {
         groupedMap.set(key, {
           page_number: row.page_number,
           paragraph_index: row.paragraph_index,
-          full_text: normalizeText(row.chunk_text),
-          sections: [section]
+          chunks: [row.chunk_text]
         });
         continue;
       }
 
-      existing.sections.push(section);
-
-      const nextText = normalizeText(row.chunk_text);
-      existing.full_text = [existing.full_text, nextText].filter(Boolean).join("\n\n");
+      existing.chunks.push(row.chunk_text);
     }
 
-    const paragraphs = Array.from(groupedMap.values());
+    const paragraphs: ApiParagraph[] = Array.from(groupedMap.values()).map(
+      (group) => {
+        const fullText = mergeChunkTexts(group.chunks);
+        const sections = extractStructuredSections(fullText);
+
+        return {
+          page_number: group.page_number,
+          paragraph_index: group.paragraph_index,
+          full_text: fullText,
+          sections
+        };
+      }
+    );
 
     return res.json({
       ok: true,
