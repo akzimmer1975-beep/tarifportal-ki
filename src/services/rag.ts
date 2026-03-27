@@ -79,9 +79,23 @@ function rowsToSources(rows: SearchDocumentRow[]): SourceItem[] {
     funktionsgruppe: row.funktionsgruppe,
     page: row.page_number,
     paragraph: row.paragraph_index,
+    paragraphFrom: row.paragraph_index_from,
+    paragraphTo: row.paragraph_index_to,
     text: row.chunk_text,
+    previousText: row.previous_text,
+    nextText: row.next_text,
+    fullText: row.full_source_text,
     similarity: row.similarity
-  }));
+  })) as SourceItem[];
+}
+
+function formatParagraphLabel(row: SearchDocumentRow): string {
+  const from = row.paragraph_index_from;
+  const to = row.paragraph_index_to;
+
+  if (from == null && to == null) return "unbekannt";
+  if (from === to) return `${from}`;
+  return `${from}-${to}`;
 }
 
 function formatContext(rows: SearchDocumentRow[]): string {
@@ -99,13 +113,13 @@ function formatContext(rows: SearchDocumentRow[]): string {
         row.tarif_type ? `Tariftyp: ${row.tarif_type}` : null,
         row.funktionsgruppe ? `Funktionsgruppe: ${row.funktionsgruppe}` : null,
         row.page_number != null ? `Seite: ${row.page_number}` : null,
-        row.paragraph_index != null ? `Absatz: ${row.paragraph_index}` : null,
+        `Absatz: ${formatParagraphLabel(row)}`,
         `Ähnlichkeit: ${row.similarity.toFixed(4)}`
       ]
         .filter(Boolean)
         .join(" | ");
 
-      return `${meta}\n${row.chunk_text}`;
+      return `${meta}\n${row.full_source_text}`;
     })
     .join("\n\n---\n\n");
 }
@@ -333,7 +347,9 @@ Beantworte die tarifliche Frage ausschließlich anhand des bereitgestellten Kont
 Erfinde nichts.
 Wenn etwas nicht sicher aus den Quellen hervorgeht, dann sage das klar.
 
-Strukturiere die Antwort verständlich und nenne Unterschiede oder Einschränkungen nur dann, wenn sie im Kontext belegbar sind.
+Wichtig:
+- Zahlen, Zeiten, Dauerangaben und Grenzwerte nur nennen, wenn sie im Kontext eindeutig stehen.
+- Wenn sich eine Regelung über mehrere aufeinanderfolgende Absätze erstreckt, berücksichtige den vollständigen zusammengeführten Quelltext.
 
 Frage:
 ${params.question}
@@ -361,6 +377,10 @@ async function generateStructuredComparisonAnswer(params: {
 Vergleiche GDL und EVG ausschließlich anhand der bereitgestellten Kontexte.
 Erfinde nichts.
 Wenn Unterschiede oder Gemeinsamkeiten nicht sicher aus den Quellen belegbar sind, dann lasse sie weg.
+
+Wichtig:
+- Zahlen, Zeiten, Dauerangaben und Grenzwerte nur nennen, wenn sie im Kontext eindeutig stehen.
+- Wenn sich eine Regelung über mehrere aufeinanderfolgende Absätze erstreckt, berücksichtige den vollständigen zusammengeführten Quelltext.
 
 Gib ausschließlich JSON zurück mit genau dieser Struktur:
 {
@@ -594,20 +614,6 @@ function formatHierarchicalAnswer(
   return parts.join("\n\n");
 }
 
-function isBroadCompareQuery(query: string): boolean {
-  const q = query.toLowerCase();
-
-  return (
-    q.includes("vergleich") ||
-    q.includes("unterschied") ||
-    q.includes("unterschiede") ||
-    q.includes("gegenüber") ||
-    q.includes("gdl und evg") ||
-    q.includes("evg und gdl") ||
-    q.length > 35
-  );
-}
-
 export async function answerWithRag(
   query: string,
   options: AnswerWithRagOptions = {}
@@ -621,9 +627,7 @@ export async function answerWithRag(
   if (options.compareUnions) {
     const topic = detectMainTopic(trimmedQuery);
     const topicSections = getSectionsForTopic(topic);
-    const shouldBuildSections =
-  topic !== "unknown" &&
-  topicSections.length > 0;
+    const shouldBuildSections = topic !== "unknown" && topicSections.length > 0;
 
     if (shouldBuildSections) {
       const sections = await Promise.all(

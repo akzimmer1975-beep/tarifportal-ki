@@ -14,7 +14,15 @@ export interface SourceItem {
   funktionsgruppe?: string | null;
   page?: number | null;
   paragraph?: number | null;
+
+  paragraphFrom?: number | null;
+  paragraphTo?: number | null;
+
   text: string;
+  previousText?: string | null;
+  nextText?: string | null;
+  fullText?: string | null;
+
   similarity?: number | null;
 }
 

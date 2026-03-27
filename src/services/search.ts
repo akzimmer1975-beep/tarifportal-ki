@@ -17,13 +17,38 @@ export type SearchDocumentRow = {
   funktionsgruppe: string | null;
   page_number: number | null;
   paragraph_index: number | null;
+
+  paragraph_index_from: number | null;
+  paragraph_index_to: number | null;
+
   chunk_text: string;
+  previous_text: string | null;
+  next_text: string | null;
+  full_source_text: string;
+
   similarity: number;
 };
 
 export type SearchDocumentsOptions = {
   limit?: number;
   union?: "GDL" | "EVG";
+};
+
+type BaseRow = {
+  document_name: string;
+  union_name: string | null;
+  tarif_type: string | null;
+  tariffwerk: string | null;
+  funktionsgruppe: string | null;
+  page_number: number | null;
+  paragraph_index: number | null;
+  chunk_text: string;
+  similarity: number;
+};
+
+type NeighborRow = {
+  paragraph_index: number | null;
+  chunk_text: string | null;
 };
 
 function normalizeOptions(
@@ -33,6 +58,164 @@ function normalizeOptions(
     return { limit: options };
   }
   return options;
+}
+
+function normalizeText(value: string | null | undefined): string {
+  return (value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function looksIncomplete(text: string): boolean {
+  const t = normalizeText(text);
+  if (!t) return false;
+
+  if (t.length < 220) return true;
+
+  const last = t.slice(-1);
+  if (![".", "!", "?", ":", ";", ")"].includes(last)) return true;
+
+  return false;
+}
+
+function shouldAttachNext(current: string, next: string | null): boolean {
+  if (!next) return false;
+
+  const c = normalizeText(current);
+  const n = normalizeText(next);
+
+  if (!n) return false;
+  if (looksIncomplete(c)) return true;
+
+  if (/gem\.?$/i.test(c)) return true;
+  if (/beträgt$/i.test(c)) return true;
+  if (/betragen$/i.test(c)) return true;
+  if (/und$/i.test(c)) return true;
+  if (/sowie$/i.test(c)) return true;
+  if (/von$/i.test(c)) return true;
+  if (/mindestens$/i.test(c)) return true;
+  if (/höchstens$/i.test(c)) return true;
+
+  if (/^\d+([.,]\d+)?\s*(stunden|std\.?|tage|wochen|monate|%|prozent)/i.test(n)) {
+    return true;
+  }
+
+  if (/^\(?\d+([.,]\d+)?\)?$/i.test(n)) {
+    return true;
+  }
+
+  return false;
+}
+
+function shouldAttachPrevious(previous: string | null, current: string): boolean {
+  if (!previous) return false;
+
+  const p = normalizeText(previous);
+  const c = normalizeText(current);
+
+  if (!p || !c) return false;
+  if (p.length < 140) return true;
+  if (!/[.!?)]$/.test(p)) return true;
+
+  if (/^(diese|dieser|dieses|dabei|hierfür|hierzu|sie|er|es)\b/i.test(c)) {
+    return true;
+  }
+
+  return false;
+}
+
+async function getNeighbors(
+  documentName: string,
+  paragraphIndex: number | null
+): Promise<{ previousText: string | null; nextText: string | null }> {
+  if (paragraphIndex == null) {
+    return { previousText: null, nextText: null };
+  }
+
+  const sql = `
+    SELECT
+      p.paragraph_index,
+      p.chunk_text
+    FROM document_paragraphs p
+    INNER JOIN documents d
+      ON d.id = p.document_id
+    WHERE d.name = $1
+      AND p.paragraph_index IN ($2, $3)
+    ORDER BY p.paragraph_index ASC
+  `;
+
+  const result = await pool.query<NeighborRow>(sql, [
+    documentName,
+    paragraphIndex - 1,
+    paragraphIndex + 1
+  ]);
+
+  let previousText: string | null = null;
+  let nextText: string | null = null;
+
+  for (const row of result.rows) {
+    if (row.paragraph_index === paragraphIndex - 1) {
+      previousText = row.chunk_text ?? null;
+    }
+    if (row.paragraph_index === paragraphIndex + 1) {
+      nextText = row.chunk_text ?? null;
+    }
+  }
+
+  return { previousText, nextText };
+}
+
+function enrichRowWithNeighbors(row: BaseRow, previousText: string | null, nextText: string | null): SearchDocumentRow {
+  const current = normalizeText(row.chunk_text);
+  const prev = normalizeText(previousText);
+  const next = normalizeText(nextText);
+
+  const includePrevious = shouldAttachPrevious(prev || null, current);
+  const includeNext = shouldAttachNext(current, next || null);
+
+  const parts: string[] = [];
+  let paragraphFrom = row.paragraph_index;
+  let paragraphTo = row.paragraph_index;
+
+  if (includePrevious && prev) {
+    parts.push(prev);
+    if (row.paragraph_index != null) {
+      paragraphFrom = row.paragraph_index - 1;
+    }
+  }
+
+  parts.push(current);
+
+  if (includeNext && next) {
+    parts.push(next);
+    if (row.paragraph_index != null) {
+      paragraphTo = row.paragraph_index + 1;
+    }
+  }
+
+  return {
+    document_name: row.document_name,
+    union_name: row.union_name,
+    tarif_type: row.tarif_type,
+    tariffwerk: row.tariffwerk,
+    funktionsgruppe: row.funktionsgruppe,
+    page_number: row.page_number,
+    paragraph_index: row.paragraph_index,
+    paragraph_index_from: paragraphFrom,
+    paragraph_index_to: paragraphTo,
+    chunk_text: current,
+    previous_text: prev || null,
+    next_text: next || null,
+    full_source_text: parts.join("\n\n").trim(),
+    similarity: row.similarity
+  };
+}
+
+async function enrichRows(rows: BaseRow[]): Promise<SearchDocumentRow[]> {
+  return Promise.all(
+    rows.map(async (row) => {
+      const neighbors = await getNeighbors(row.document_name, row.paragraph_index);
+      return enrichRowWithNeighbors(row, neighbors.previousText, neighbors.nextText);
+    })
+  );
 }
 
 export async function searchDocuments(
@@ -86,8 +269,8 @@ export async function searchDocuments(
     LIMIT $${params.length}
   `;
 
-  const result = await pool.query<SearchDocumentRow>(sql, params);
-  return result.rows;
+  const result = await pool.query<BaseRow>(sql, params);
+  return enrichRows(result.rows);
 }
 
 export async function keywordSearch(
@@ -135,6 +318,6 @@ export async function keywordSearch(
     LIMIT $${params.length}
   `;
 
-  const result = await pool.query<SearchDocumentRow>(sql, params);
-  return result.rows;
+  const result = await pool.query<BaseRow>(sql, params);
+  return enrichRows(result.rows);
 }
