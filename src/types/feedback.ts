@@ -13,6 +13,7 @@ export type FeedbackType =
 export interface FeedbackSourceInput {
   documentName?: string;
   unionName?: string;
+  tariffType?: string;
   tarifType?: string;
   tariffwerk?: string;
   funktionsgruppe?: string;
@@ -29,6 +30,7 @@ export interface FeedbackSourceInput {
 export interface FeedbackCustomSourceInput {
   documentName?: string;
   unionName?: string;
+  tariffType?: string;
   tarifType?: string;
   tariffwerk?: string;
   funktionsgruppe?: string;

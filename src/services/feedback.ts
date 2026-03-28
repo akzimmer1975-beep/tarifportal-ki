@@ -1,5 +1,76 @@
 import { pool } from "../db.js";
-import type { CreateFeedbackBody, FeedbackRow } from "../types/feedback.js";
+import type {
+  CreateFeedbackBody,
+  FeedbackCustomSourceInput,
+  FeedbackRow,
+  FeedbackSourceInput
+} from "../types/feedback.js";
+
+function normalizeText(value: string | null | undefined): string {
+  return (value ?? "").trim();
+}
+
+function normalizeOptionalText(value: string | null | undefined): string | null {
+  const normalized = normalizeText(value);
+  return normalized ? normalized : null;
+}
+
+function normalizeNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function getUnifiedTariffType(
+  value: { tariffType?: string; tarifType?: string } | null | undefined
+): string | null {
+  return normalizeOptionalText(value?.tariffType) ?? normalizeOptionalText(value?.tarifType);
+}
+
+function normalizeSourceInput(source?: FeedbackSourceInput) {
+  if (!source) return null;
+
+  return {
+    documentName: normalizeOptionalText(source.documentName),
+    unionName: normalizeOptionalText(source.unionName),
+    tariffType: getUnifiedTariffType(source),
+    tariffwerk: normalizeOptionalText(source.tariffwerk),
+    funktionsgruppe: normalizeOptionalText(source.funktionsgruppe),
+    pageNumber: normalizeNumber(source.pageNumber),
+    paragraphIndex: normalizeNumber(source.paragraphIndex),
+    text: normalizeOptionalText(source.text),
+    fullText: normalizeOptionalText(source.fullText),
+    sectionIndex: normalizeNumber(source.sectionIndex),
+    similarity: normalizeNumber(source.similarity)
+  };
+}
+
+function normalizeCustomSourceInput(customSource?: FeedbackCustomSourceInput) {
+  if (!customSource) return null;
+
+  return {
+    documentName: normalizeOptionalText(customSource.documentName),
+    unionName: normalizeOptionalText(customSource.unionName),
+    tariffType: getUnifiedTariffType(customSource),
+    tariffwerk: normalizeOptionalText(customSource.tariffwerk),
+    funktionsgruppe: normalizeOptionalText(customSource.funktionsgruppe),
+    pageNumber: normalizeNumber(customSource.pageNumber),
+    paragraphIndex: normalizeNumber(customSource.paragraphIndex),
+    text: normalizeOptionalText(customSource.text),
+    comment: normalizeOptionalText(customSource.comment)
+  };
+}
 
 export function normalizeQuery(input: string): string {
   return input
@@ -12,7 +83,11 @@ export function normalizeQuery(input: string): string {
 export function validateFeedbackPayload(body: CreateFeedbackBody): string[] {
   const errors: string[] = [];
 
-  if (!body.queryText?.trim()) {
+  const queryText = normalizeOptionalText(body.queryText);
+  const source = normalizeSourceInput(body.source);
+  const customSource = normalizeCustomSourceInput(body.customSource);
+
+  if (!queryText) {
     errors.push("queryText ist erforderlich.");
   }
 
@@ -24,11 +99,11 @@ export function validateFeedbackPayload(body: CreateFeedbackBody): string[] {
     errors.push("feedbackType ist erforderlich.");
   }
 
-  if (body.targetType === "source" && !body.source) {
+  if (body.targetType === "source" && !source) {
     errors.push("Für targetType='source' ist source erforderlich.");
   }
 
-  if (body.targetType === "custom_source" && !body.customSource) {
+  if (body.targetType === "custom_source" && !customSource) {
     errors.push("Für targetType='custom_source' ist customSource erforderlich.");
   }
 
@@ -57,38 +132,26 @@ export function validateFeedbackPayload(body: CreateFeedbackBody): string[] {
     );
   }
 
-  if (
-    body.targetType === "source" &&
-    body.source &&
-    !body.source.documentName?.trim()
-  ) {
+  if (body.targetType === "source" && source && !source.documentName) {
     errors.push("Für source-Feedback ist documentName erforderlich.");
   }
 
   if (
     body.targetType === "source" &&
-    body.source &&
-    !body.source.text?.trim() &&
-    !body.source.fullText?.trim()
+    source &&
+    !source.text &&
+    !source.fullText
   ) {
     errors.push(
       "Für source-Feedback ist mindestens text oder fullText erforderlich."
     );
   }
 
-  if (
-    body.targetType === "custom_source" &&
-    body.customSource &&
-    !body.customSource.documentName?.trim()
-  ) {
+  if (body.targetType === "custom_source" && customSource && !customSource.documentName) {
     errors.push("Für custom_source ist documentName erforderlich.");
   }
 
-  if (
-    body.targetType === "custom_source" &&
-    body.customSource &&
-    !body.customSource.text?.trim()
-  ) {
+  if (body.targetType === "custom_source" && customSource && !customSource.text) {
     errors.push("Für custom_source ist text erforderlich.");
   }
 
@@ -99,7 +162,10 @@ export async function insertFeedback(
   body: CreateFeedbackBody
 ): Promise<FeedbackRow> {
   const normalizedQuery =
-    body.normalizedQuery?.trim() || normalizeQuery(body.queryText);
+    normalizeOptionalText(body.normalizedQuery) || normalizeQuery(body.queryText);
+
+  const source = normalizeSourceInput(body.source);
+  const customSource = normalizeCustomSourceInput(body.customSource);
 
   const result = await pool.query<FeedbackRow>(
     `
@@ -145,37 +211,37 @@ export async function insertFeedback(
     RETURNING *
     `,
     [
-      body.queryText,
+      normalizeText(body.queryText),
       normalizedQuery,
-      body.topicKey ?? null,
-      body.sectionKey ?? null,
+      normalizeOptionalText(body.topicKey),
+      normalizeOptionalText(body.sectionKey),
       body.targetType,
       body.feedbackType,
 
-      body.source?.documentName ?? null,
-      body.source?.unionName ?? null,
-      body.source?.tarifType ?? null,
-      body.source?.tariffwerk ?? null,
-      body.source?.funktionsgruppe ?? null,
-      body.source?.pageNumber ?? null,
-      body.source?.paragraphIndex ?? null,
-      body.source?.text ?? null,
-      body.source?.fullText ?? null,
-      body.source?.sectionIndex ?? null,
-      body.source?.similarity ?? null,
+      source?.documentName ?? null,
+      source?.unionName ?? null,
+      source?.tariffType ?? null,
+      source?.tariffwerk ?? null,
+      source?.funktionsgruppe ?? null,
+      source?.pageNumber ?? null,
+      source?.paragraphIndex ?? null,
+      source?.text ?? null,
+      source?.fullText ?? null,
+      source?.sectionIndex ?? null,
+      source?.similarity ?? null,
 
-      body.customSource?.documentName ?? null,
-      body.customSource?.unionName ?? null,
-      body.customSource?.tarifType ?? null,
-      body.customSource?.tariffwerk ?? null,
-      body.customSource?.funktionsgruppe ?? null,
-      body.customSource?.pageNumber ?? null,
-      body.customSource?.paragraphIndex ?? null,
-      body.customSource?.text ?? null,
-      body.customSource?.comment ?? null,
+      customSource?.documentName ?? null,
+      customSource?.unionName ?? null,
+      customSource?.tariffType ?? null,
+      customSource?.tariffwerk ?? null,
+      customSource?.funktionsgruppe ?? null,
+      customSource?.pageNumber ?? null,
+      customSource?.paragraphIndex ?? null,
+      customSource?.text ?? null,
+      customSource?.comment ?? null,
 
-      body.answerText ?? null,
-      body.userComment ?? null
+      normalizeOptionalText(body.answerText),
+      normalizeOptionalText(body.userComment)
     ]
   );
 

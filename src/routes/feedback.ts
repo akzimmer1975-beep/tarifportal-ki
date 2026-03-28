@@ -28,10 +28,13 @@ feedbackRouter.post("/", async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error("POST /api/feedback failed:", error);
+    console.error("POST /api/feedback body:", JSON.stringify(req.body, null, 2));
 
     return res.status(500).json({
       ok: false,
-      error: "Feedback konnte nicht gespeichert werden."
+      error: error instanceof Error
+        ? error.message
+        : "Feedback konnte nicht gespeichert werden."
     });
   }
 });
@@ -61,7 +64,9 @@ feedbackRouter.get("/search", async (req: Request, res: Response) => {
 
     return res.status(500).json({
       ok: false,
-      error: "Feedback konnte nicht geladen werden."
+      error: error instanceof Error
+        ? error.message
+        : "Feedback konnte nicht geladen werden."
     });
   }
 });
