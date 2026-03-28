@@ -7,8 +7,7 @@ import type {
   UnionName
 } from "../types/chat.js";
 import {
-  keywordSearch,
-  searchDocuments,
+  hybridSearch,
   type SearchDocumentRow
 } from "./search.js";
 
@@ -114,7 +113,7 @@ function formatContext(rows: SearchDocumentRow[]): string {
         row.funktionsgruppe ? `Funktionsgruppe: ${row.funktionsgruppe}` : null,
         row.page_number != null ? `Seite: ${row.page_number}` : null,
         `Absatz: ${formatParagraphLabel(row)}`,
-        `Ähnlichkeit: ${row.similarity.toFixed(4)}`
+        `Score: ${row.similarity.toFixed(4)}`
       ]
         .filter(Boolean)
         .join(" | ");
@@ -131,24 +130,22 @@ async function getBestRows(
     vectorLimit?: number;
     finalLimit?: number;
     minSimilarity?: number;
+    topicKey?: string;
+    sectionKey?: string;
   } = {}
 ): Promise<SearchDocumentRow[]> {
   const vectorLimit = options.vectorLimit ?? 12;
   const finalLimit = options.finalLimit ?? 8;
   const minSimilarity = options.minSimilarity ?? 0.35;
 
-  const [semanticRows, keywordRows] = await Promise.all([
-    searchDocuments(query, {
-      union: options.union,
-      limit: vectorLimit
-    }),
-    keywordSearch(query, {
-      union: options.union,
-      limit: Math.min(vectorLimit, 8)
-    })
-  ]);
+  const rows = await hybridSearch(query, {
+    union: options.union,
+    limit: vectorLimit,
+    topicKey: options.topicKey,
+    sectionKey: options.sectionKey
+  });
 
-  return normalizeRows([...semanticRows, ...keywordRows], minSimilarity, finalLimit);
+  return normalizeRows(rows, minSimilarity, finalLimit);
 }
 
 function detectMainTopic(query: string): TopicKey {
@@ -441,7 +438,8 @@ ${params.evgContext}
 async function getRowsForSection(
   baseQuery: string,
   section: TopicSection,
-  union: UnionName
+  union: UnionName,
+  topic: TopicKey
 ): Promise<SearchDocumentRow[]> {
   const rows: SearchDocumentRow[] = [];
 
@@ -452,7 +450,9 @@ async function getRowsForSection(
       union,
       vectorLimit: 12,
       finalLimit: 6,
-      minSimilarity: 0.35
+      minSimilarity: 0.35,
+      topicKey: topic,
+      sectionKey: section.key
     });
 
     rows.push(...result);
@@ -463,11 +463,12 @@ async function getRowsForSection(
 
 async function buildSectionCompare(
   baseQuery: string,
-  section: TopicSection
+  section: TopicSection,
+  topic: TopicKey
 ): Promise<StructuredCompareSection> {
   const [gdlRows, evgRows] = await Promise.all([
-    getRowsForSection(baseQuery, section, "GDL"),
-    getRowsForSection(baseQuery, section, "EVG")
+    getRowsForSection(baseQuery, section, "GDL", topic),
+    getRowsForSection(baseQuery, section, "EVG", topic)
   ]);
 
   const gdlSources = rowsToSources(gdlRows);
@@ -631,7 +632,7 @@ export async function answerWithRag(
 
     if (shouldBuildSections) {
       const sections = await Promise.all(
-        topicSections.map((section) => buildSectionCompare(trimmedQuery, section))
+        topicSections.map((section) => buildSectionCompare(trimmedQuery, section, topic))
       );
 
       const structured = summarizeSectionResults(topic, sections);
@@ -662,13 +663,15 @@ export async function answerWithRag(
         union: "GDL",
         vectorLimit: 12,
         finalLimit: 8,
-        minSimilarity: 0.35
+        minSimilarity: 0.35,
+        topicKey: topic
       }),
       getBestRows(trimmedQuery, {
         union: "EVG",
         vectorLimit: 12,
         finalLimit: 8,
-        minSimilarity: 0.35
+        minSimilarity: 0.35,
+        topicKey: topic
       })
     ]);
 
@@ -722,11 +725,14 @@ export async function answerWithRag(
     };
   }
 
+  const topic = detectMainTopic(trimmedQuery);
+
   const rows = await getBestRows(trimmedQuery, {
     union: options.union,
     vectorLimit: 12,
     finalLimit: 8,
-    minSimilarity: 0.35
+    minSimilarity: 0.35,
+    topicKey: topic
   });
 
   const sources = rowsToSources(rows);
