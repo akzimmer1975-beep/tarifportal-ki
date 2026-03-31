@@ -103,6 +103,112 @@ export type GetDocumentsOptions = {
   q?: string;
 };
 
+export type AnswerRating =
+  | "correct"
+  | "partially_correct"
+  | "wrong"
+  | "no_source";
+
+export type QualityLabel = "green" | "yellow" | "red";
+
+export type SourceRating = "helpful" | "irrelevant" | "best_source";
+
+export type FeedbackType = "review" | "missing_source";
+
+export type SearchFeedbackRow = {
+  id: number;
+  query_text: string;
+  normalized_query: string;
+  topic_key: string | null;
+  section_key: string | null;
+  target_type: string;
+  feedback_type: string;
+
+  source_document_name: string | null;
+  source_union_name: string | null;
+  source_tarif_type: string | null;
+  source_tariffwerk: string | null;
+  source_funktionsgruppe: string | null;
+  source_page_number: number | null;
+  source_paragraph_index: number | null;
+  source_text: string | null;
+  source_full_text: string | null;
+  source_section_index: number | null;
+  source_similarity: number | null;
+
+  custom_document_name: string | null;
+  custom_union_name: string | null;
+  custom_tarif_type: string | null;
+  custom_tariffwerk: string | null;
+  custom_funktionsgruppe: string | null;
+  custom_page_number: number | null;
+  custom_paragraph_index: number | null;
+  custom_text: string | null;
+  custom_comment: string | null;
+
+  answer_text: string | null;
+  user_comment: string | null;
+
+  answer_rating: AnswerRating | null;
+  quality_label: QualityLabel | null;
+  source_rating: SourceRating | null;
+  document_id: number | null;
+  section_label: string | null;
+  metadata: Record<string, unknown> | null;
+
+  created_at: string;
+};
+
+export type CreateSearchFeedbackInput = {
+  queryText: string;
+  normalizedQuery: string;
+  topicKey?: string | null;
+  sectionKey?: string | null;
+  targetType?: string;
+  feedbackType?: FeedbackType;
+
+  sourceDocumentName?: string | null;
+  sourceUnionName?: string | null;
+  sourceTarifType?: string | null;
+  sourceTariffwerk?: string | null;
+  sourceFunktionsgruppe?: string | null;
+  sourcePageNumber?: number | null;
+  sourceParagraphIndex?: number | null;
+  sourceText?: string | null;
+  sourceFullText?: string | null;
+  sourceSectionIndex?: number | null;
+  sourceSimilarity?: number | null;
+
+  customDocumentName?: string | null;
+  customUnionName?: string | null;
+  customTarifType?: string | null;
+  customTariffwerk?: string | null;
+  customFunktionsgruppe?: string | null;
+  customPageNumber?: number | null;
+  customParagraphIndex?: number | null;
+  customText?: string | null;
+  customComment?: string | null;
+
+  answerText?: string | null;
+  userComment?: string | null;
+
+  answerRating?: AnswerRating | null;
+  qualityLabel?: QualityLabel | null;
+  sourceRating?: SourceRating | null;
+  documentId?: number | null;
+  sectionLabel?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+export type FeedbackSignalRow = {
+  normalized_query: string | null;
+  document_id: number | null;
+  source_page_number: number | null;
+  source_paragraph_index: number | null;
+  section_label: string | null;
+  score: number;
+};
+
 export async function testDbConnection() {
   const client = await pool.connect();
   try {
@@ -217,6 +323,36 @@ export async function initDb(): Promise<void> {
     `);
 
     await client.query(`
+      ALTER TABLE search_feedback
+      ADD COLUMN IF NOT EXISTS answer_rating TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE search_feedback
+      ADD COLUMN IF NOT EXISTS quality_label TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE search_feedback
+      ADD COLUMN IF NOT EXISTS source_rating TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE search_feedback
+      ADD COLUMN IF NOT EXISTS document_id BIGINT;
+    `);
+
+    await client.query(`
+      ALTER TABLE search_feedback
+      ADD COLUMN IF NOT EXISTS section_label TEXT;
+    `);
+
+    await client.query(`
+      ALTER TABLE search_feedback
+      ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
+    `);
+
+    await client.query(`
       CREATE INDEX IF NOT EXISTS idx_documents_item_id
       ON documents(item_id);
     `);
@@ -264,6 +400,21 @@ export async function initDb(): Promise<void> {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_search_feedback_source_union_name
       ON search_feedback(source_union_name);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_search_feedback_document_id
+      ON search_feedback(document_id);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_search_feedback_answer_rating
+      ON search_feedback(answer_rating);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_search_feedback_source_rating
+      ON search_feedback(source_rating);
     `);
 
     try {
@@ -772,4 +923,154 @@ export async function saveParagraphEmbedding(params: {
     `,
     [params.paragraphId, `[${params.embedding.join(",")}]`]
   );
+}
+
+export async function insertSearchFeedback(
+  input: CreateSearchFeedbackInput
+): Promise<SearchFeedbackRow> {
+  const result = await pool.query<SearchFeedbackRow>(
+    `
+      INSERT INTO search_feedback (
+        query_text,
+        normalized_query,
+        topic_key,
+        section_key,
+        target_type,
+        feedback_type,
+
+        source_document_name,
+        source_union_name,
+        source_tarif_type,
+        source_tariffwerk,
+        source_funktionsgruppe,
+        source_page_number,
+        source_paragraph_index,
+        source_text,
+        source_full_text,
+        source_section_index,
+        source_similarity,
+
+        custom_document_name,
+        custom_union_name,
+        custom_tarif_type,
+        custom_tariffwerk,
+        custom_funktionsgruppe,
+        custom_page_number,
+        custom_paragraph_index,
+        custom_text,
+        custom_comment,
+
+        answer_text,
+        user_comment,
+
+        answer_rating,
+        quality_label,
+        source_rating,
+        document_id,
+        section_label,
+        metadata
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+        $18, $19, $20, $21, $22, $23, $24, $25, $26,
+        $27, $28,
+        $29, $30, $31, $32, $33, $34::jsonb
+      )
+      RETURNING *
+    `,
+    [
+      input.queryText,
+      input.normalizedQuery,
+      input.topicKey ?? null,
+      input.sectionKey ?? null,
+      input.targetType ?? "answer",
+      input.feedbackType ?? "review",
+
+      input.sourceDocumentName ?? null,
+      input.sourceUnionName ?? null,
+      input.sourceTarifType ?? null,
+      input.sourceTariffwerk ?? null,
+      input.sourceFunktionsgruppe ?? null,
+      input.sourcePageNumber ?? null,
+      input.sourceParagraphIndex ?? null,
+      input.sourceText ?? null,
+      input.sourceFullText ?? null,
+      input.sourceSectionIndex ?? null,
+      input.sourceSimilarity ?? null,
+
+      input.customDocumentName ?? null,
+      input.customUnionName ?? null,
+      input.customTarifType ?? null,
+      input.customTariffwerk ?? null,
+      input.customFunktionsgruppe ?? null,
+      input.customPageNumber ?? null,
+      input.customParagraphIndex ?? null,
+      input.customText ?? null,
+      input.customComment ?? null,
+
+      input.answerText ?? null,
+      input.userComment ?? null,
+
+      input.answerRating ?? null,
+      input.qualityLabel ?? null,
+      input.sourceRating ?? null,
+      input.documentId ?? null,
+      input.sectionLabel ?? null,
+      JSON.stringify(input.metadata ?? {})
+    ]
+  );
+
+  const row = result.rows[0];
+
+  if (!row) {
+    throw new Error("Feedback konnte nicht gespeichert werden.");
+  }
+
+  return row;
+}
+
+export async function getFeedbackSignalsForQuery(
+  normalizedQuery: string
+): Promise<FeedbackSignalRow[]> {
+  const result = await pool.query<FeedbackSignalRow>(
+    `
+      SELECT
+        normalized_query,
+        document_id,
+        source_page_number,
+        source_paragraph_index,
+        section_label,
+        SUM(
+          CASE
+            WHEN source_rating = 'best_source' THEN 4
+            WHEN source_rating = 'helpful' THEN 2
+            WHEN source_rating = 'irrelevant' THEN -3
+            ELSE 0
+          END
+          +
+          CASE
+            WHEN answer_rating = 'correct' THEN 2
+            WHEN answer_rating = 'partially_correct' THEN 1
+            WHEN answer_rating = 'wrong' THEN -2
+            WHEN answer_rating = 'no_source' THEN -3
+            ELSE 0
+          END
+        )::int AS score
+      FROM search_feedback
+      WHERE normalized_query = $1
+        AND feedback_type IN ('review', 'missing_source')
+        AND document_id IS NOT NULL
+      GROUP BY
+        normalized_query,
+        document_id,
+        source_page_number,
+        source_paragraph_index,
+        section_label
+      ORDER BY score DESC
+    `,
+    [normalizedQuery]
+  );
+
+  return result.rows;
 }
